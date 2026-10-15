@@ -123,6 +123,18 @@ def seed_reference_data(engine) -> None:
         s.commit()
 
 
+def _recover_interrupted_tasks(settings: Settings, engine) -> None:
+    """Tasks left "running" by a crashed process are recorded as failed (visible on System and /health)."""
+    from datetime import timedelta
+
+    from jobpilot.db import make_sessionmaker
+    from jobpilot.services.tasks import mark_interrupted
+
+    with make_sessionmaker(engine)() as s:
+        if mark_interrupted(s, settings, min_age=timedelta(minutes=1)):
+            s.commit()
+
+
 def create_app(settings: Settings | None = None, run_migrations: bool = True) -> FastAPI:
     settings = settings or get_settings()
     settings.ensure_dirs()
@@ -132,6 +144,7 @@ def create_app(settings: Settings | None = None, run_migrations: bool = True) ->
         migrate(settings, engine)
     settings.secure_files()
     seed_reference_data(engine)
+    _recover_interrupted_tasks(settings, engine)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):

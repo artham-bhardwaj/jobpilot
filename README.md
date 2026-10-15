@@ -103,7 +103,7 @@ jobpilot --debug <command>                # show a full traceback if something f
 ## Tests
 
 ```bash
-.venv/bin/pytest            # 294 tests, offline (fake HTTP, fake DNS), synthetic fixtures only
+.venv/bin/pytest            # 304 tests, offline (fake HTTP, fake DNS), synthetic fixtures only
 ```
 
 A few tests drive your local Chrome headlessly (PDF rendering, form-fill safety); they are skipped
@@ -125,7 +125,26 @@ by default. Enable each in **Settings → scheduler**, then either:
   systemctl --user daemon-reload && systemctl --user enable --now jobpilot-scheduler.timer
   ```
 
-Overlapping runs are prevented with per-task file locks.
+Overlapping runs are prevented with per-task file locks. Running both the in-process scheduler and the timer is
+safe (the locks stop a task from running twice), but one of them is enough. Nothing runs while the laptop sleeps;
+due tasks run on the next pass after it wakes. Scheduled tasks never send email or submit applications.
+
+## Safe start and stop
+
+```bash
+cd ~/projects/jobpilot
+.venv/bin/jobpilot db current        # read-only: shows {"current", "head", "pending"}; changes nothing
+.venv/bin/jobpilot serve             # migrates if "pending" was true (backup first), then serves 127.0.0.1:8765
+```
+
+Every command except `db current` applies pending migrations, always taking a `pre-migrate-<rev>` backup first
+(`jobpilot backup list` shows it).
+
+Stop with **Ctrl-C** in that terminal (or `kill <pid>`, i.e. SIGTERM): the server finishes the current request,
+waits for a running scheduled task, and exits. Database writes are transactional, so even an unclean stop
+(power loss, `kill -9`) leaves the last committed state; a source run interrupted mid-way saves nothing, and a
+task left "running" is recorded as failed ("Interrupted") the next time JobPilot starts. A browser-assistance
+window can be closed at any time; the application record keeps what was saved before.
 
 ## Configuration
 

@@ -1,8 +1,9 @@
 # JobPilot — implementation status
 
-**Source of truth for what is verified.** Last updated: 2026-10-15, after Milestone 9 offline validation (294 tests passing).
-Commits: `19f3d19` baseline, `04b70f3` Milestone 8. Milestone 9 fixes and tests are uncommitted. `docs/CHECKLIST.md` is
-superseded by this file.
+**Source of truth for what is verified.** Last updated: 2026-10-16, after Milestone 10's offline phases (304 tests passing).
+Commits: `19f3d19` baseline, `04b70f3` Milestone 8, `cb9b23f` Milestone 9, then the Milestone 10 offline phases
+("Complete milestone 10 reliability validation").
+`docs/CHECKLIST.md` is superseded by this file.
 
 Legend: **Verified** = exercised by automated tests and/or the live local checks below.
 **Offline-verified** = tested only against recorded/synthetic responses; the live service has not been contacted.
@@ -121,6 +122,77 @@ Expected requests: `GET https://boards-api.greenhouse.io/robots.txt`, then
 `GET https://boards-api.greenhouse.io/v1/boards/<token>/jobs?content=true`. That's 2 requests, nothing saved.
 Then one real run (2 requests), and a second real run later to confirm stability and that nothing expires wrongly.
 Compare 5 stored jobs against their public pages for title, location, description and apply URL.
+
+## Milestone 10 — real-world validation & application readiness (offline phases complete; live phases await authorisation)
+
+**No external service was contacted.** Your `./data` is unchanged: DB SHA-256 identical, still schema **0005**
+(1 profile row, 1 audit entry; no skills, work history, resumes or sources), `backups/` and `files/` empty.
+It was not migrated: nothing live has run against it yet, and migrating only to turn the health check green is not a reason.
+
+### Results
+
+| Check | Result |
+|---|---|
+| Full suite (inside a loopback-only network namespace) | **304 passed, 0 failed, 0 skipped, 0 errors, 173.9 s** (Milestone 9 baseline: 294) |
+| Milestone 9 review | Committed as `cb9b23f` after reviewing the staged diff and scanning it for secrets and personal data. Within JobPilot, `edit_draft` is the only code path that changes a draft's recipient, subject or body, so a Gmail draft created before an edit cannot be sent afterwards. The attached resume is fixed when the draft is created. Edits made **inside Gmail** are sent as they are in Gmail (your own edit, not stale content). |
+| Acceptance (`tests/test_m10_acceptance.py`) | One synthetic flow covering all 20 criteria, including: Gmail draft created → draft edited → send refused until re-approved → only the new draft (`d-2`, new text) is sent; wrong-host browser approval refused; headless Chrome fills the synthetic form and the page server receives **no POST**; an anomalous then a failed source run expire nothing; backup and restore keep the jobs, the "applied" application, run history and draft revisions. |
+
+### Defects found and fixed (tests in `tests/test_m10_operations.py`; both fail on `cb9b23f`)
+
+1. **A task interrupted by a crash, `kill -9` or power loss stayed "running" forever**, with no finish time, and
+   `/health` kept reporting "last task failure: none". Reproduced on scratch data. Now an orphaned run (one whose
+   task lock is free) is recorded as failed ("Interrupted…"). This happens when the same task next runs, and at app
+   start-up for runs older than a minute. Runs still genuinely in progress, i.e. with their lock held, are left alone.
+2. **A negative or `NaN` `Retry-After` on a 429 crashed the retry path** (`time.sleep` raised `ValueError`), so a
+   temporary rate limit was recorded as a `failed` source. Such values now fall back to the normal backoff and the
+   run is `unavailable`. HTTP-date values already worked; they now have a regression test too.
+
+New coverage without defects: assist pauses without filling on a **login wall** and on an **MFA/verification-code**
+prompt (headless Chrome; previously only CAPTCHA was tested). The test page server now records requests, so tests
+can prove no form submission happened.
+
+### Integration classification
+
+| Integration | Classification |
+|---|---|
+| Source engine (dedup, provenance, expiry, partial/anomaly, dry run, run history, failure isolation) | Automated-test verified (synthetic) |
+| Greenhouse | Synthetic/offline verified; **blocked by authorisation** for live (see request below) |
+| Lever, Ashby, JSON-LD pages | Synthetic/offline verified; not tested live |
+| CSV/JSON import, add by URL | Automated-test verified (synthetic files; URL fetch offline only) |
+| Matching, eligibility, resume selection, application preparation | Automated-test verified (synthetic profile). Real-profile calibration: **not possible yet**, because your profile has no skills or experience and there are no resumes |
+| Browser assistance | Automated-test verified on local synthetic pages (headless Chrome). Real application form: not tested, blocked by authorisation |
+| Gmail | Synthetic/offline verified (stubbed Google endpoints). Live: not tested, blocked by authorisation and your own OAuth client |
+| Scheduler, task history, crash recovery | Automated-test verified; local runtime verified (Milestone 9: start with scheduler, SIGTERM exit 0.2 s) |
+| Backup/restore/migration | Automated-test verified; verified on a copy of your real DB (Milestone 9) |
+| Local-only binding, CSRF, Host checks | Automated-test verified; local runtime verified |
+| systemd timer | Unit generation tested; not installed (needs your approval) |
+| JS-rendered, login-walled or CAPTCHA-protected application sites | Unsupported by design (assist pauses and hands over to you) |
+
+### Remaining risks
+- Real Greenhouse responses may differ from the fixture.
+  - A board whose JSON with `content=true` exceeds the 5 MB response cap fails safely: nothing is saved or expired.
+    In that case a smaller board is needed, or a reviewed change to the cap.
+  - If `boards-api.greenhouse.io/robots.txt` disallows the API path, JobPilot refuses to fetch it, by design.
+- Hosted application forms often embed an invisible reCAPTCHA iframe. Assist would then **pause on page load**: safe,
+  but it fills nothing. Only a live, approved test can show how often this happens.
+- The Gmail daily limit counts from UTC midnight. An old Gmail draft left in Gmail after an edit has to be deleted by you.
+- No per-run job limit: a source run imports the whole board. To keep the first live test bounded, run it against a
+  scratch data directory and review the results before importing into your real data.
+
+### Authorisation request: first live source (nothing has been contacted)
+
+| # | Item | Value |
+|---|---|---|
+| 1 | Company | **to be confirmed by you**. Suggestion from general knowledge, not checked live: GitLab (remote-first and hires in India; its public board has historically been on Greenhouse). Any company whose careers page links to `boards.greenhouse.io/<token>` or `job-boards.greenhouse.io/<token>` works. |
+| 2 | Board identifier | `<token>` from that URL, configured as source type `greenhouse`, config `{"board_token": "<token>"}` (Sources → Add). Board URLs aren't accepted, only the token. |
+| 3 | Hostnames contacted | `boards-api.greenhouse.io` only |
+| 4 | Requests | `GET /robots.txt`, then `GET /v1/boards/<token>/jobs?content=true` (≥2 s apart) |
+| 5 | robots.txt | Yes, fetched first and obeyed. A 401/403 or an oversized file means no fetch. |
+| 6 | Maximum listing requests | 1 per run (plus up to 2 retries only on 429/5xx, honouring `Retry-After` ≤ 60 s). Planned: dry run, run, re-run = **at most 3 listing requests + 3 robots.txt fetches** (robots.txt is fetched once per run). |
+| 7 | Data stored | Dry run: only a run record (counts, status). Real run: each posting's title, location, description (text and raw HTML), apply URL, Greenhouse job id, department and posted date; a sighting with source and method; parsed requirements and match scores. No personal data is sent anywhere. |
+| 8 | Changes your database? | **No**: proposed against a scratch copy of your data directory (`JOBPILOT_DATA_DIR=<scratch>`). Your real DB is only touched after you've reviewed the results and asked for it. |
+| 9 | Can it expire jobs? | Not on the first run (nothing exists yet). On the re-run, a job expires only after 2 consecutive successful runs omit it, and empty, failed or mass-disappearance responses expire nothing. |
+| 10 | How to stop safely | Ctrl-C at any point. The run is one transaction, so an interrupted run saves nothing. Disable or delete the source in Sources to prevent further runs (its jobs are kept). No scheduler is enabled. |
 
 ## Summary (Stage 7 results)
 
@@ -278,8 +350,8 @@ Offline tests passing does **not** mean these work live. None has contacted a re
 
 ## 4. Failed tests and open defects
 
-- **Failed tests: none** (294/294 after Milestone 9, also with the network removed).
-- **Open defects: none known.** Milestone 9's three defects are fixed with regression tests. All of D1–D8 and S1–S3/S5 from the audit are fixed with regression tests.
+- **Failed tests: none** (304/304 after Milestone 10's offline phases, run with the network removed).
+- **Open defects: none known.** Milestone 9's three and Milestone 10's two defects are fixed with regression tests. All of D1–D8 and S1–S3/S5 from the audit are fixed with regression tests.
   S4 (no auth) and S6 (unencrypted backups) are accepted limitations (§3).
 - One non-editable `pip install .` attempt failed during verification and could not be reproduced in three
   subsequent clean attempts. Its error message was hidden by `-q | tail -1`. Most likely cause: the isolated

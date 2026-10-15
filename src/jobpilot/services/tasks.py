@@ -15,8 +15,10 @@ import re
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from jobpilot.config import Settings
@@ -51,6 +53,39 @@ def task_lock(settings: Settings, name: str):
             os.close(fd)
 
 
+INTERRUPTED = "Interrupted: JobPilot stopped before this task finished (crash, kill or power loss)"
+
+
+def mark_interrupted(session: Session, settings: Settings, *, name: str | None = None, before_id: int | None = None,
+                     min_age: timedelta = timedelta(0)) -> int:
+    """Mark ``running`` task records whose process is gone as failed, so a crash shows up as a failure.
+
+    With ``name`` the caller must hold that task's lock (so no older run of it can still be alive).
+    Without it, a record counts as orphaned only if its task lock is free.
+    """
+    q = select(TaskRun).where(TaskRun.status == "running")
+    if name is not None:
+        q = q.where(TaskRun.task_name == name)
+    if before_id is not None:
+        q = q.where(TaskRun.id < before_id)
+    cutoff = utcnow() - min_age
+    count = 0
+    for run in session.scalars(q):
+        if run.started_at and run.started_at > cutoff:
+            continue
+        if name is None:
+            try:
+                with task_lock(settings, run.task_name):
+                    pass
+            except TaskLocked:
+                continue  # still running in another process
+        run.status, run.message, run.finished_at = "failed", INTERRUPTED, utcnow()
+        count += 1
+    if count:
+        log.warning("interrupted task runs marked failed", extra={"count": count})
+    return count
+
+
 def run_task(
     settings: Settings,
     factory: sessionmaker[Session],
@@ -68,6 +103,9 @@ def run_task(
         run_id = run.id
     try:
         with task_lock(settings, name):
+            with factory() as s:
+                mark_interrupted(s, settings, name=name, before_id=run_id)
+                s.commit()
             attempt = 0
             while True:
                 attempt += 1

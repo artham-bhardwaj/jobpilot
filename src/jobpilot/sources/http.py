@@ -205,7 +205,10 @@ class PoliteHttp:
                 continue
             if r.status_code in RETRY_STATUSES and attempt < attempts:
                 try:
-                    delay = min(float(r.headers.get("Retry-After", "")), MAX_RETRY_AFTER)
+                    delay = float(r.headers.get("Retry-After", ""))
+                    if not 0 <= delay:  # negative or NaN: time.sleep() would raise
+                        raise ValueError(delay)
+                    delay = min(delay, MAX_RETRY_AFTER)
                 except ValueError:
                     delay = min(2 ** attempt, 10)
                 log.warning("http retry", extra={"url": url, "status": r.status_code, "delay": delay})

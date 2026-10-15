@@ -290,17 +290,22 @@ def edit_draft(session: Session, draft: EmailDraft, data: DraftEdit) -> EmailDra
     if draft.status in ("sent", "cancelled"):
         raise DraftError(f"Cannot edit a {draft.status} draft")
     new_to = data.to_address.lower() if data.to_address else None
+    stale_gmail_draft = None
     if (new_to, data.subject, data.body) != (draft.to_address, draft.subject, draft.body):
         n = len(list(session.scalars(select(DraftRevision.id).where(DraftRevision.draft_id == draft.id)))) + 1
         session.add(DraftRevision(draft_id=draft.id, revision_no=n, to_address=draft.to_address, subject=draft.subject,
                                   body=draft.body, status_before=draft.status))
+        # A Gmail draft holds the old content; sending it would deliver text you didn't approve.
+        # Forget it so "send" builds a fresh Gmail draft from the re-approved content.
+        stale_gmail_draft, draft.gmail_draft_id = draft.gmail_draft_id, None
     draft.to_address = data.to_address.lower() if data.to_address else None
     draft.subject, draft.body = data.subject, data.body
     draft.missing_fields = sorted(set(MISSING_RE.findall(data.subject + "\n" + data.body)))
     if draft.status == "approved":
         draft.status = "draft"  # material change: needs re-approval
         draft.approved_at = None
-    audit.record(session, "draft.edited", "email_draft", draft.id)
+    audit.record(session, "draft.edited", "email_draft", draft.id,
+                 **({"stale_gmail_draft": stale_gmail_draft} if stale_gmail_draft else {}))
     return draft
 
 

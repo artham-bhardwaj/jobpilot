@@ -73,6 +73,7 @@ class LeverAdapter:
     label = "Lever job board"
     config_help = '{"site": "examplecompany"}  — from jobs.lever.co/<site>'
     BASE = "https://api.lever.co/v0/postings"
+    MAX_POSTINGS = 2200
 
     def validate_config(self, config: dict) -> dict:
         return {"site": _token(config, "site")}
@@ -117,10 +118,13 @@ class LeverAdapter:
             if not isinstance(data, list):
                 return FetchResult(items=items, errors=["Unexpected Lever response shape"])
             items.extend(self._item(p, company_name) for p in data if p.get("text"))
-            if len(data) < limit or skip > 2000:
-                break
+            if len(data) < limit:
+                return FetchResult(items=items, full_snapshot=True)
             skip += limit
-        return FetchResult(items=items, full_snapshot=True)
+            if skip >= self.MAX_POSTINGS:
+                # Not a full listing: postings past the cap must not count as "missing" (they'd be expired).
+                return FetchResult(items=items, errors=[f"Stopped after {skip} postings (page limit); listing is "
+                                                        "incomplete, so nothing was expired"])
 
     def fetch_one(self, http: PoliteHttp, site: str, posting_id: str, company_name: str | None) -> JobData:
         if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", posting_id):

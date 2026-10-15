@@ -244,10 +244,14 @@ def draft_detail(draft_id: int, request: Request, db: Session = Depends(get_db))
 async def draft_edit(draft_id: int, request: Request, db: Session = Depends(get_db)):
     d = get_or_404(db, EmailDraft, draft_id)
     form = await form_dict(request)
+    had_gmail_draft = bool(d.gmail_draft_id)
     try:
         ds.edit_draft(db, d, ds.DraftEdit.model_validate(form))
     except (ValidationError, ds.DraftError) as exc:
         return redirect(f"/drafts/{draft_id}", err=first_error(exc))
+    if had_gmail_draft and not d.gmail_draft_id:
+        return redirect(f"/drafts/{draft_id}", msg="Saved. The copy already in your Gmail Drafts is now outdated — delete "
+                                                   "it there; JobPilot will create a new one from the approved text")
     return redirect(f"/drafts/{draft_id}", msg="Saved")
 
 

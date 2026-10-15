@@ -26,18 +26,20 @@ def _require_database(settings) -> None:
             "  at your existing data directory. Relative paths resolve against the current directory.", code=2)
 
 
-def _ctx(require_db: bool = True):
+def _ctx(require_db: bool = True, run_migrations: bool = True):
     from jobpilot.db import make_engine, make_sessionmaker, migrate
     from jobpilot.logging_setup import configure_logging
 
     settings = get_settings()
     if require_db:
         _require_database(settings)
-    settings.ensure_dirs()
+    if run_migrations:
+        settings.ensure_dirs()
     configure_logging(settings, console_level="WARNING")
     engine = make_engine(settings)
-    migrate(settings, engine)
-    settings.secure_files()
+    if run_migrations:
+        migrate(settings, engine)
+        settings.secure_files()
     return settings, engine, make_sessionmaker(engine)
 
 
@@ -86,10 +88,12 @@ def cmd_serve(args) -> int:
 
 
 def cmd_db(args) -> int:
-    settings, engine, _ = _ctx()
+    # `current` only reports: it must not upgrade, or it could never show a pending migration.
+    settings, engine, _ = _ctx(run_migrations=args.action == "upgrade")
     from jobpilot.db import current_revision, head_revision
 
-    print(json.dumps({"current": current_revision(engine), "head": head_revision(settings)}))
+    current, head = current_revision(engine), head_revision(settings)
+    print(json.dumps({"current": current, "head": head, "pending": current != head}))
     return 0
 
 

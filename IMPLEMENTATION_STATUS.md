@@ -1,7 +1,8 @@
 # JobPilot — implementation status
 
-**Source of truth for what is verified.** Last updated: 2026-10-15, after Milestone 8 (Stages A–K, 269 tests passing).
-Baseline commit `19f3d19`; all Milestone 8 work is uncommitted. `docs/CHECKLIST.md` is superseded by this file.
+**Source of truth for what is verified.** Last updated: 2026-10-15, after Milestone 9 offline validation (294 tests passing).
+Commits: `19f3d19` baseline, `04b70f3` Milestone 8. Milestone 9 fixes and tests are uncommitted. `docs/CHECKLIST.md` is
+superseded by this file.
 
 Legend: **Verified** = exercised by automated tests and/or the live local checks below.
 **Offline-verified** = tested only against recorded/synthetic responses; the live service has not been contacted.
@@ -44,6 +45,82 @@ Milestone: real-world discovery, matching, resume selection, recruiter workflows
 | I. Analytics | collection by source (new vs duplicate, dry runs excluded, duplicate share only with a minimum sample); review-queue counts; resume selection by role category (exact/fallback/missing); common skill gaps; CSV exports `sources` and `skill_gaps` (formula-injection guard); dashboard "Pipeline" funnel (Applied counts only evidence-backed submissions) | 261 |
 | J. Reliability | background scheduler thread stopped on app shutdown; job expiry only from explicit deadlines (vague "closing in January" ignored); "Next run" + task labels on the System page, with a note that nothing runs while the laptop sleeps; backup/restore keeps the new tables; a schema-0005 backup is upgraded to 0006 on restore | 267 |
 | K. Acceptance | one end-to-end offline test across the 18 criteria (import → dedup → provenance → required/preferred → relevance vs eligibility with evidence → resume selection → queue → preparation record → recruiter draft → missing-info blocks → browser stops before submit → evidence-gated "applied" → security → backup/restore → pages) plus a check that no AI/LLM SDK is a dependency or import. **Full suite: 269 passed, 0 failed, 0 skipped (142 s).** | 269 |
+
+## Milestone 9 — live validation & operational readiness (offline part complete)
+
+No live external request was made. Your data in `./data` was not modified: the DB SHA-256 is unchanged and it is
+still at schema 0005, with 1 profile row and 1 audit entry. All checks on your data used copies in the session scratch area.
+
+### Verification levels
+
+| Level | What |
+|---|---|
+| Automated tests | **294 passed, 0 failed, 0 skipped, 0 errors**. Baseline before Milestone 9: 269/0/0/0. The full suite also passes inside a network namespace with only loopback (`unshare -rn`), so **no test can reach an external host**. |
+| Local runtime (scratch data dir, port 8799) | `/health` ok; all main pages 200; `/docs`, `/redoc`, `/openapi.json`, `/api/docs` 404; bound to 127.0.0.1. Remote binds (`0.0.0.0`, LAN IP, `::`) refused with exit 2. Foreign `Host` 400; foreign `Origin`/`Referer` and `Origin: null` 403; `..` paths under `/static` 404. Scheduler enabled in-process: health shows it, System page shows "Next run", SIGTERM exits in 0.2 s. |
+| Copy of your real DB | `db upgrade` 0005→0006: profile and audit rows byte-identical, `integrity_check` ok, no FK violations, 0600 `pre-migrate-0005` backup. Restoring that backup with `backup restore`: rows identical, re-migrated to 0006, all 5 new tables present, 0600 pre-restore backup taken. |
+| Oversized/malformed input (local) | 300 MB multipart upload: "File too large", server peak RSS ~112 MB. 300 MB urlencoded body: 400 in 18 ms. 5 MB text field: 400 ("exceeded maximum size of 1024KB"). Cross-origin 300 MB upload: 403 before the body is read. |
+| Synthetic/offline only | Every source adapter, Gmail, and browser assist (local test pages). See the adapter table below. |
+| Live external service | **None.** |
+
+### Defects found and fixed (each has a regression test in `tests/test_m9_validation.py`)
+
+1. **`jobpilot db current` silently migrated the database**, and took a backup, so it could never show a pending
+   migration. Reproduced on a copy of your 0005 DB. Now `current` is read-only and prints
+   `{"current", "head", "pending"}`; `upgrade` migrates as before.
+2. **Lever boards larger than the page cap (2,200 postings) were treated as complete listings**, so postings past
+   the cap counted as "missing" and were expired after 2 runs. The 50% mass-disappearance check doesn't catch a
+   ~12% shortfall. Now a capped listing is a `partial` run that expires nothing. Request count is unchanged (22 pages).
+3. **Editing a draft after its Gmail draft was created made "Send via Gmail" send the old Gmail draft.** Editing
+   correctly revoked approval, but re-approving and sending reused the stale `gmail_draft_id`, so the text you
+   didn't approve was sent. Now a content change drops the stale reference, so sending builds a fresh Gmail draft
+   from the re-approved text. The edit page warns that the old copy in Gmail Drafts is outdated (delete it there),
+   and the audit log records its id.
+
+Before the fixes, the tests for defects 2 and 3 fail when run against the committed code (`git archive HEAD`).
+Defect 1 was reproduced manually before the fix.
+
+### Additional regression tests (passed, no defect found)
+- Failed, unavailable, malformed or anomalous runs leave the `jobs`, `job_sightings` and `companies` rows **identical**
+  (full-row comparison). Covers 429, 503, timeout, connection error, 404, HTML instead of JSON, `jobs: null`, a non-object
+  job entry, a wrongly typed field, and an empty board.
+- A bug partway through an ingest rolls back updates already applied to existing jobs. A dry run against existing
+  jobs changes nothing.
+- Removing location, work mode, experience or salary from a posting never raises relevance or confidence
+  (95.9 → 89.9 → 83.9 as information is removed). Skills mentioned only in "About us"/"Benefits" are not mandatory.
+- A do-not-contact entry added *after* approval blocks the Gmail send, and nothing reaches Gmail.
+
+### Already covered by Milestone 8 tests (re-run, all passing)
+- **Matching:** confirmed / learning / unverified / missing skills; work vs personal-project evidence; hard conflicts
+  override high relevance; resume coverage counts only skills that are both in the resume and confirmed; missing or
+  unsuitable resume variants are warned about.
+- **Browser assist:** exact-host approval (web and CLI); unknown and sensitive fields recorded as questions; consent
+  boxes untouched; never submits (headless Chrome, local page).
+- **Redirects:** local-only.
+- **Email:** sending needs approval plus a typed `SEND`; daily send limit; draft revisions are kept.
+- **Gmail tests:** stubbed Google endpoints only.
+
+### Source adapters (none live-tested; all offline with synthetic/recorded fixtures)
+
+All network fetches go through `PoliteHttp`:
+- 20 s timeout; 2 retries on 429/5xx, honouring `Retry-After` (capped at 60 s);
+- ≥2 s between requests to the same host; User-Agent `JobPilot/0.1 (personal job-search assistant)`;
+- robots.txt: 401/403 → disallow; other 4xx → allow; oversized → disallow; unreachable → proceed;
+- 5 MB response cap; each redirect hop re-validated (max 5); private/loopback addresses refused.
+
+| Adapter | Input / config | Requests per run | Snapshot & expiry | Known restrictions |
+|---|---|---|---|---|
+| Greenhouse | `{"board_token": "<co>"}` → `boards-api.greenhouse.io/v1/boards/<co>/jobs?content=true` | robots.txt + 1 | full snapshot; expiry after 2 consecutive misses; empty board or >50% vanish (≥10 active) = anomaly | real response shape not yet compared; job-board URLs (`boards.`/`job-boards.`, EU) recognised for single-job add |
+| Lever | `{"site": "<co>"}` → `api.lever.co/v0/postings/<co>?mode=json` | robots.txt + 1 per 100 postings (max 22) | full snapshot below 2,200 postings; above that partial (fixed above) | EU Lever (`api.eu.lever.co`) boards not supported for collection |
+| Ashby | `{"board": "<co>"}` → `api.ashbyhq.com/posting-api/job-board/<co>` | robots.txt + 1 | full snapshot; unlisted jobs skipped | fixture built from public docs, not a recorded response |
+| JSON-LD pages | `{"urls": [...]}` (≤50 individual job pages) | robots.txt + 1 per URL | never a full snapshot; a page expires only after consecutive 404/410 | no JS-rendered or login-walled pages; listing pages not crawled |
+| Add by URL | Greenhouse/Lever URLs use the API; others use page JSON-LD | 1–2 | n/a | first posting only if a page has several |
+| CSV/JSON import | file upload, ≤2,000 rows, ≤10 MB, column aliases | none | n/a (manual) | rows without a title skipped and reported |
+
+**Recommended first live test (needs your authorisation):** a Greenhouse board you care about, as a **dry run** first.
+Expected requests: `GET https://boards-api.greenhouse.io/robots.txt`, then
+`GET https://boards-api.greenhouse.io/v1/boards/<token>/jobs?content=true`. That's 2 requests, nothing saved.
+Then one real run (2 requests), and a second real run later to confirm stability and that nothing expires wrongly.
+Compare 5 stored jobs against their public pages for title, location, description and apply URL.
 
 ## Summary (Stage 7 results)
 
@@ -171,7 +248,12 @@ Offline tests passing does **not** mean these work live. None has contacted a re
   single-user tool that only fetches URLs you configure.
 - Backups are **not encrypted** (0600 files in a 0700 directory). Keep them private; anyone who can read them can
   read everything JobPilot stores.
-- Your database (`./data`) is still at schema 0005 (1 profile row, untouched). Your earlier server on port 8794 is no longer running; the next `jobpilot serve` migrates it to 0006, taking an automatic backup first.
+- Your database (`./data`) is still at schema 0005 (1 profile row, untouched). Your earlier server on port 8794 is no longer running; the next `jobpilot serve` (or any command except `db current`) migrates it to 0006, taking an automatic backup first. This was verified on a copy (Milestone 9).
+- The Gmail daily send limit counts from midnight **UTC** (05:30 IST), not local midnight.
+- After editing a draft that already had a Gmail draft, the old copy stays in your Gmail Drafts folder until you
+  delete it. JobPilot never sends it.
+- Large file uploads are spooled to a temporary file by the web framework before JobPilot rejects them (>10 MB).
+  Memory stays bounded; this needs a same-origin request from your own browser.
 - Parsing is rule-based: unusual posting layouts may leave requirements as "unknown" (scored 0, flagged low confidence)
   rather than guessed. Contact duplicate detection uses email/name+company only.
 - Scheduled tasks don't run while the laptop is asleep or the server is stopped; they catch up on the next due check.
@@ -196,8 +278,8 @@ Offline tests passing does **not** mean these work live. None has contacted a re
 
 ## 4. Failed tests and open defects
 
-- **Failed tests: none** (173/173, also when run from another directory).
-- **Open defects: none known.** All of D1–D8 and S1–S3/S5 from the audit are fixed with regression tests.
+- **Failed tests: none** (294/294 after Milestone 9, also with the network removed).
+- **Open defects: none known.** Milestone 9's three defects are fixed with regression tests. All of D1–D8 and S1–S3/S5 from the audit are fixed with regression tests.
   S4 (no auth) and S6 (unencrypted backups) are accepted limitations (§3).
 - One non-editable `pip install .` attempt failed during verification and could not be reproduced in three
   subsequent clean attempts. Its error message was hidden by `-q | tail -1`. Most likely cause: the isolated
@@ -266,8 +348,8 @@ Gmail and web tests use fake HTTP sessions and a fake DNS resolver.
 
 Do these one at a time, with your approval before any external request:
 
-1. **One live job board, read-only.** Pick one or two companies whose Greenhouse or Lever boards you care about.
-   Run `jobpilot collect` against them, then compare the stored jobs with the public pages for:
+1. **One live job board, read-only.** Pick one company whose Greenhouse board you care about. Run a dry run first
+   (exact requests listed in the Milestone 9 section), then `jobpilot collect`. Compare the stored jobs with the public pages for:
    - title, location, description, apply URL;
    - expiry on a second run;
    - the rate limiting and robots.txt behaviour shown in the logs.

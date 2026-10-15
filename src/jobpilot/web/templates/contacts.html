@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select %}
+{% block title %}Contacts{% endblock %}
+{% block content %}
+<h1>Recruiter directory</h1>
+<p class="muted">Recruiters, hiring managers and referral contacts with where each detail came from. Only use
+public or authorised sources. Guessed addresses are always labelled as guessed.</p>
+
+<form method="get" class="filters card">
+  <label class="field"><span>Search</span><input type="search" name="q" value="{{ q }}" placeholder="name, email, company"></label>
+  <label class="field"><span>Role</span><select name="role_type"><option value="">any</option>
+    {% for r in ["recruiter","hiring_manager","referral","engineer","other"] %}<option {% if role_type == r %}selected{% endif %}>{{ r }}</option>{% endfor %}</select></label>
+  <div class="actions"><button class="primary">Filter</button></div>
+</form>
+
+<section class="card">
+  {% if contacts %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Contact</th><th>Company</th><th>Email</th><th>Source</th><th>Confidence</th><th>Discovered</th></tr></thead>
+    <tbody>
+    {% for c in contacts %}
+      <tr>
+        <td><a href="/contacts/{{ c.id }}">{{ c.display_name }}</a><div class="muted small">{{ c.title or "" }} · {{ c.role_type }}</div>
+          {% if c.do_not_contact %}{{ badge("do not contact", "b-do_not_contact") }}{% endif %}</td>
+        <td>{{ c.company.name if c.company else "—" }}</td>
+        <td>{% if c.email %}{{ c.email }} {{ badge(c.email_status) }}{% else %}—{% endif %}</td>
+        <td class="small">{{ c.source_type }}{% if c.source_url %}<br><a href="{{ c.source_url }}" target="_blank" rel="noopener noreferrer">link</a>{% endif %}</td>
+        <td>{{ (c.confidence * 100)|round|int }}%</td>
+        <td class="nowrap small">{{ c.discovered_at|d }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("No contacts yet.") }}{% endif %}
+</section>
+
+<section class="card">
+  <h2>Add contact{% if prefill_job %} for “{{ prefill_job.title }}”{% endif %}</h2>
+  {% with c=none, action="/contacts", prefill_job=prefill_job %}{% include "_contact_form.html" %}{% endwith %}
+</section>
+
+<section class="card" id="dnc">
+  <h2>Do-not-contact list</h2>
+  <p class="muted small">Blocks drafting, approval, sending and follow-ups for matching addresses, domains or companies.</p>
+  {% if dnc %}
+  <table class="table compact">
+    <thead><tr><th>Type</th><th>Value</th><th>Reason</th><th>Added</th><th></th></tr></thead>
+    {% for r in dnc %}<tr><td>{{ r.kind }}</td><td>{{ r.value }}</td><td>{{ r.reason or "" }}</td><td>{{ r.created_at|d }}</td>
+      <td><form method="post" action="/dnc/{{ r.id }}/delete" class="inline" data-confirm="Remove from do-not-contact list?"><button class="small">remove</button></form></td></tr>{% endfor %}
+  </table>
+  {% else %}{{ empty("Empty.") }}{% endif %}
+  <form method="post" action="/dnc" class="filters">
+    {{ select("kind", "Type", ["email", "domain", "company"]) }}
+    {{ field("value", "Value", required=True) }}
+    {{ field("reason", "Reason") }}
+    <div class="actions"><button>Add</button></div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Email templates{% endblock %}
+{% block content %}
+<p><a href="/drafts">← Drafts</a></p>
+<h1>Email templates</h1>
+<p class="muted">Jinja2 syntax. Available values: <code>candidate.full_name / first_name / email / phone / headline /
+links / matching_skills</code>, <code>contact.first_name / name / title</code>, <code>company.name</code>,
+<code>job.title / url / location</code>, <code>resume.label</code>, <code>application.applied_on</code>,
+<code>interview.date / round</code>, <code>previous.subject / sent_on</code>. Unknown values render as
+<code>[[MISSING: …]]</code> and must be filled in by you before approval. Keep templates factual: don't claim
+relationships, conversations or referrals that didn't happen.</p>
+{% for t in templates %}
+<section class="card">
+  <h2>{{ t.name }} <span class="muted small">({{ t.key }})</span></h2>
+  <form method="post" action="/drafts/templates/{{ t.id }}">
+    <label class="field"><span>Subject</span><input type="text" name="subject" value="{{ t.subject }}"></label>
+    <label class="field"><span>Body</span><textarea name="body" rows="10" class="mono">{{ t.body }}</textarea></label>
+    <div class="actions"><button class="primary">Save</button>{% if t.builtin %}<button name="reset" value="1" data-confirm="Reset to the built-in text?">Reset</button>{% endif %}</div>
+  </form>
+</section>
+{% endfor %}
+{% endblock %}

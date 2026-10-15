@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }} <span class="muted small">({{ status }})</span></h1>
+<section class="card">
+  <p>{{ detail }}</p>
+  <div class="actions"><a class="button" href="/" data-back>Go back</a><a class="button primary" href="/">Overview</a></div>
+</section>
+{% endblock %}

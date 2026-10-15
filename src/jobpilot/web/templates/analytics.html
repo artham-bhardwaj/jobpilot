@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% macro rate(r) -%}
+  {% if r.value is none %}<span class="muted" title="Rates need at least {{ s.min_sample }} records">{{ r.note }}</span>{% else %}<b>{{ r.value|pct(1) }}</b> <span class="muted small">({{ r.note }})</span>{% endif %}
+{%- endmacro %}
+{% block title %}Analytics{% endblock %}
+{% block content %}
+<h1>Analytics</h1>
+<p class="muted">Computed from your stored records. Rates appear only with at least {{ s.min_sample }} records in the
+denominator; below that you see the raw counts. "Missing" means the data isn't known — not zero.</p>
+
+<div class="stats">
+  <div class="stat"><div class="v">{{ s.jobs.total }}</div><div class="l">jobs collected ({{ s.jobs.last_7_days }} in last 7 days)</div></div>
+  <div class="stat"><div class="v">{{ s.jobs.relevant }}</div><div class="l">relevant (score ≥ {{ s.threshold }}) · {{ rate(s.jobs.relevant_rate) }}</div></div>
+  <div class="stat"><div class="v">{{ s.applications.submitted }}</div><div class="l">applications submitted ({{ s.applications.total }} total)</div></div>
+  <div class="stat"><div class="v">{{ s.interviews.total }}</div><div class="l">interviews ({{ s.interviews.upcoming }} upcoming)</div></div>
+  <div class="stat"><div class="v">{{ s.applications.by_status.get("offer", 0) }}</div><div class="l">offers</div></div>
+</div>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Conversion</h2>
+  <table class="kv">
+    <tr><th>Response rate</th><td>{{ rate(s.applications.response_rate) }} <span class="muted small">(any outcome incl. rejection)</span></td></tr>
+    <tr><th>Positive response</th><td>{{ rate(s.applications.positive_response_rate) }}</td></tr>
+    <tr><th>Interview rate</th><td>{{ rate(s.applications.interview_rate) }}</td></tr>
+    <tr><th>Offer rate</th><td>{{ rate(s.applications.offer_rate) }}</td></tr>
+    <tr><th>Interview → offer</th><td>{{ rate(s.applications.interview_to_offer) }}</td></tr>
+    <tr><th>Median days to response</th><td>{{ s.applications.median_days_to_response if s.applications.median_days_to_response is not none else "insufficient data" }}</td></tr>
+    <tr><th>Awaiting response</th><td>{{ s.applications.awaiting_response }}</td></tr>
+  </table>
+  <h3>Applications by status</h3>
+  {% for k, v in s.applications.by_status.items() %}<span class="tag">{{ k }} · {{ v }}</span>{% else %}<span class="muted">none</span>{% endfor %}
+</section>
+
+<section class="card">
+  <h2>Jobs</h2>
+  <table class="kv">
+    <tr><th>Active / expired</th><td>{{ s.jobs.active }} / {{ s.jobs.expired }}</td></tr>
+    <tr><th>Reposts detected</th><td>{{ s.jobs.reposts }}</td></tr>
+    <tr><th>Last 30 days</th><td>{{ s.jobs.last_30_days }}</td></tr>
+    <tr><th>Eligibility (active)</th><td>{% for k, v in s.jobs.eligibility.items() %}<span class="tag">{{ k or "not scored" }} · {{ v }}</span>{% endfor %}</td></tr>
+    <tr><th>Missing data</th><td class="small">posted date: {{ s.jobs.missing.posted_date }} · salary: {{ s.jobs.missing.salary }} · location: {{ s.jobs.missing.location }} · experience requirement: {{ s.jobs.missing.experience_requirement }}</td></tr>
+  </table>
+  <h3>Outreach</h3>
+  <table class="kv">
+    <tr><th>Emails sent</th><td>{{ s.outreach.sent }} of {{ s.outreach.drafts }} drafts</td></tr>
+    <tr><th>Reply rate</th><td>{{ rate(s.outreach.reply_rate) }}</td></tr>
+    <tr><th>Contacts (verified)</th><td>{{ s.outreach.contacts }} ({{ s.outreach.verified_contacts }})</td></tr>
+  </table>
+</section>
+</div>
+
+<section class="card">
+  <h2>Source effectiveness</h2>
+  {% if s.sources %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Source</th><th>Type</th><th>Jobs</th><th>Relevant</th><th>Applications</th><th>Responses</th><th>Interviews</th></tr></thead>
+    {% for r in s.sources %}<tr><td>{{ r.source }}</td><td>{{ r.kind }}</td><td>{{ r.jobs }}</td><td>{{ r.relevant }} · {{ rate(r.relevant_rate) }}</td>
+      <td>{{ r.applications }}</td><td>{{ rate(r.responses) }}</td><td>{{ r.interviews }}</td></tr>{% endfor %}
+  </table></div>
+  {% else %}{{ empty("No sources yet.") }}{% endif %}
+</section>
+
+<section class="card">
+  <h2>Resume performance</h2>
+  {% if s.resumes %}
+  <table class="table">
+    <thead><tr><th>Resume version</th><th>Applications</th><th>Responses</th><th>Interviews</th></tr></thead>
+    {% for r in s.resumes %}<tr><td>{{ r.resume }}</td><td>{{ r.applications }}</td><td>{{ rate(r.responses) }}</td><td>{{ rate(r.interviews) }}</td></tr>{% endfor %}
+  </table>
+  <p class="muted small">Differences between resumes are not causal: they're confounded by which jobs each was used for.</p>
+  {% else %}{{ empty("No submitted applications yet.") }}{% endif %}
+</section>
+
+<section class="card" id="export">
+  <h2>CSV export</h2>
+  <div class="actions">{% for k in exports %}<a class="button" href="/analytics/export/{{ k }}.csv">{{ k }}.csv</a>{% endfor %}</div>
+</section>
+{% endblock %}

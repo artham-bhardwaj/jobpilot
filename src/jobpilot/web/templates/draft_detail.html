@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, post_button %}
+{% block title %}Draft #{{ d.id }}{% endblock %}
+{% block content %}
+<p><a href="/drafts">← Drafts</a></p>
+<h1>{{ kind_labels.get(d.kind, d.kind) }} {{ badge(d.status) }}</h1>
+<p class="muted">
+  {% if d.contact %}To <a href="/contacts/{{ d.contact.id }}">{{ d.contact.display_name }}</a>{% endif %}
+  {% if d.job %} · re <a href="/jobs/{{ d.job.id }}">{{ d.job.title }}</a> at {{ d.job.company_name or "?" }}{% endif %}
+  {% if d.resume_version %} · resume: <a href="/resumes/versions/{{ d.resume_version.id }}/download">{{ d.resume_version.label }}</a>{% endif %}
+</p>
+{% for w in warnings %}<div class="notice warn">{{ w }}</div>{% endfor %}
+{% if d.missing_fields %}<div class="notice bad">Fill in before approving (replace the <code>[[MISSING: …]]</code> markers with real information — nothing will be invented for you): {{ d.missing_fields|join(", ") }}</div>{% endif %}
+{% if d.suppressed_reason %}<div class="notice">Follow-ups suppressed: {{ d.suppressed_reason }}</div>{% endif %}
+
+<section class="card">
+  {% if d.status in ("draft", "approved") %}
+  <form method="post" action="/drafts/{{ d.id }}">
+    {{ field("to_address", "To", d.to_address, type="email") }}
+    {{ field("subject", "Subject", d.subject, required=True) }}
+    <label class="field"><span>Body</span><textarea name="body" id="body" rows="16">{{ d.body }}</textarea></label>
+    <div class="actions">
+      <button>Save edits</button>
+      {% if d.status == "approved" %}<span class="muted small">Editing an approved draft returns it to draft for re-approval.</span>{% endif %}
+    </div>
+  </form>
+  {% else %}
+    <table class="kv"><tr><th>To</th><td>{{ d.to_address }}</td></tr><tr><th>Subject</th><td>{{ d.subject }}</td></tr></table>
+    <div class="desc" id="body">{{ d.body }}</div>
+  {% endif %}
+  <textarea id="copytext" class="copy-src" readonly>To: {{ d.to_address or "" }}
+Subject: {{ d.subject }}
+
+{{ d.body }}</textarea>
+  <div class="actions">
+    <button type="button" data-copy="copytext">Copy email</button>
+    {% if d.status == "draft" %}
+      <form method="post" action="/drafts/{{ d.id }}/approve" class="inline">
+        {% if d.contact and d.contact.email_status == "guessed" %}<label class="checkbox"><input type="checkbox" name="ack_guessed" value="1"> I understand the address is guessed</label>{% endif %}
+        <button class="primary" {% if problems %}disabled title="{{ problems|join('; ') }}"{% endif %}>Approve</button>
+      </form>
+      {% if problems %}<span class="muted small">Cannot approve yet: {{ problems|join("; ") }}</span>{% endif %}
+    {% endif %}
+    {% if d.status == "approved" %}
+      {{ post_button("/drafts/" ~ d.id ~ "/sent", "I sent it — mark as sent", "primary", confirm="Record this email as sent by you?") }}
+      {% if gmail_ready %}
+        <form method="post" action="/gmail/drafts/{{ d.id }}/create" class="inline"><button>Create Gmail draft</button></form>
+        <form method="post" action="/gmail/drafts/{{ d.id }}/send" class="inline" data-confirm="Send this email now from your Gmail account to {{ d.to_address }}?">
+          <input type="hidden" name="confirm" value="SEND"><button class="danger">Send via Gmail</button></form>
+      {% endif %}
+      {{ post_button("/drafts/" ~ d.id ~ "/unapprove", "Back to draft") }}
+    {% endif %}
+    {% if d.status == "sent" and not d.reply_received_at %}
+      <form method="post" action="/drafts/{{ d.id }}/reply" class="inline"><input type="text" name="summary" placeholder="reply summary (optional)" style="max-width:240px"><button>Record reply</button></form>
+      {{ post_button("/drafts/" ~ d.id ~ "/followup", "Draft follow-up") }}
+    {% endif %}
+    {% if d.status in ("draft", "approved") %}{{ post_button("/drafts/" ~ d.id ~ "/cancel", "Cancel draft", "danger", confirm="Cancel this draft?") }}{% endif %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>Timeline</h2>
+  <table class="kv small">
+    <tr><th>Created</th><td>{{ d.created_at|dt }}</td></tr>
+    <tr><th>Approved</th><td>{{ d.approved_at|dt }}</td></tr>
+    <tr><th>Sent</th><td>{{ d.sent_at|dt }}{% if d.sent_via %} via {{ d.sent_via }}{% endif %}</td></tr>
+    <tr><th>Follow-up due</th><td>{{ d.follow_up_due_at|dt }}</td></tr>
+    <tr><th>Reply received</th><td>{{ d.reply_received_at|dt }}</td></tr>
+    {% if d.gmail_draft_id or d.gmail_message_id %}<tr><th>Gmail</th><td>draft {{ d.gmail_draft_id or "—" }} · message {{ d.gmail_message_id or "—" }} · thread {{ d.gmail_thread_id or "—" }}</td></tr>{% endif %}
+  </table>
+  {% if thread|length > 1 %}
+  <h3>Thread</h3>
+  {% for t in thread %}<div>{% if t.id == d.id %}<b>{% endif %}<a href="/drafts/{{ t.id }}">#{{ t.id }} {{ t.subject }}</a>{% if t.id == d.id %}</b>{% endif %} {{ badge(t.status) }}</div>{% endfor %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field %}
+{% block title %}{{ resume.name }}{% endblock %}
+{% block content %}
+<p><a href="/resumes">← Resume library</a></p>
+<h1>{{ resume.name }} <span class="muted small">({{ resume.category }})</span></h1>
+
+<section class="card">
+  <h2>Versions</h2>
+  {% if resume.versions %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>#</th><th>Status</th><th>Source</th><th>File</th><th>Pages</th><th>Validation</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+    {% for v in resume.versions|reverse %}
+      <tr>
+        <td>v{{ v.version_no }}</td>
+        <td>{{ badge(v.status) }}{% if v.approved_at %}<div class="muted small">{{ v.approved_at|dt }}</div>{% endif %}</td>
+        <td>{{ v.source }}<div class="muted small">{{ v.source_note or "" }}</div>{% if v.change_summary %}<div class="small">{{ v.change_summary }}</div>{% endif %}</td>
+        <td><a href="/resumes/versions/{{ v.id }}/download">{{ v.original_filename }}</a><div class="muted small">{{ (v.file_size or 0) // 1024 }} KB · sha256 {{ (v.sha256 or "")[:12] }}…</div></td>
+        <td>{{ v.page_count or "—" }}</td>
+        <td class="wrap small">
+          {% for e in (v.validation or {}).get("errors", []) %}<div class="notice bad">{{ e }}</div>{% endfor %}
+          {% for w in (v.validation or {}).get("warnings", []) %}<div class="notice warn">{{ w }}</div>{% endfor %}
+          {% set sk = (v.validation or {}).get("skills_detected", []) %}
+          {% if sk %}<div>skills found: {% for s in sk %}<span class="tag">{{ s }}</span>{% endfor %}</div>{% endif %}
+        </td>
+        <td class="nowrap">{{ v.created_at|dt }}</td>
+        <td class="nowrap">
+          {% if v.status == "draft" %}<form method="post" action="/resumes/versions/{{ v.id }}/approve" class="inline" data-confirm="Approve v{{ v.version_no }}? You confirm the file content is accurate and ready to send."><button class="small primary">approve</button></form>{% endif %}
+          {% if v.status != "archived" %}<form method="post" action="/resumes/versions/{{ v.id }}/archive" class="inline"><button class="small">archive</button></form>{% endif %}
+        </td>
+      </tr>
+      {% if v.extracted_text %}<tr><td></td><td colspan="7"><details><summary class="small">extracted text</summary><div class="desc">{{ v.extracted_text }}</div></details></td></tr>{% endif %}
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("No versions yet. Import your existing resume file below.") }}{% endif %}
+</section>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Import a resume file</h2>
+  <p class="muted small">PDF, DOCX, TXT or MD (max {{ settings.max_upload_bytes // 1000000 }} MB). Stored unchanged as a new draft version.</p>
+  <form method="post" action="/resumes/{{ resume.id }}/upload" enctype="multipart/form-data">
+    <label class="field"><span>File</span><input type="file" name="file" accept=".pdf,.docx,.txt,.md" required></label>
+    {{ field("change_summary", "What changed (optional)") }}
+    <label class="checkbox"><input type="checkbox" name="suggest_skills" value="1"> Add skills found in this file to my profile as <b>unverified</b> suggestions</label>
+    <div class="actions"><button class="primary">Import</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Generate from confirmed facts</h2>
+  {% if not profile.confirmed_at %}
+    <div class="notice warn">Confirm your profile details first (Profile page).</div>
+  {% endif %}
+  <p class="muted small">Uses only facts you have confirmed, exactly as written. Produces a PDF when Chrome/Playwright
+  is available (otherwise HTML). The result is a draft — review it before approving.</p>
+  <form method="post" action="/resumes/{{ resume.id }}/generate">
+    {% for kind, label in [("employment","Employment"),("projects","Projects"),("education","Education"),("skills","Skills")] %}
+      <h3>{{ label }}</h3>
+      {% for f in confirmed[kind] %}
+        <label class="checkbox"><input type="checkbox" name="{{ kind }}" value="{{ f.id }}" checked>
+          {% if kind == "employment" %}{{ f.title }}, {{ f.company }}{% elif kind == "projects" %}{{ f.name }}{% elif kind == "education" %}{{ f.institution }}{% else %}{{ f.name }}{% endif %}</label>
+      {% else %}<p class="muted small">No confirmed {{ label|lower }}.</p>{% endfor %}
+    {% endfor %}
+    {{ field("change_summary", "Purpose / what changed") }}
+    <div class="actions"><button {% if not profile.confirmed_at %}disabled{% endif %}>Generate draft version</button></div>
+  </form>
+</section>
+</div>
+{% endblock %}

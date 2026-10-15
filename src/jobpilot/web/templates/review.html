@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, score %}
+{% block title %}Review queue{% endblock %}
+{% block content %}
+<h1>Human-review queue</h1>
+<p class="muted">Decisions JobPilot will not make for you.</p>
+
+<section class="card">
+  <h2>Action items ({{ q.actions|length }})</h2>
+  {% if q.actions %}
+  <table class="table">
+    {% for i in q.actions %}<tr>
+      <td>{{ badge(i.kind|replace("_", " "), "b-warn") }}</td>
+      <td><a href="/{{ 'applications' if i.entity_type == 'application' else (i.entity_type ~ 's') }}/{{ i.entity_id }}">{{ i.title }}</a><div class="small muted">{{ i.reason or "" }}</div></td>
+      <td class="nowrap small">{{ i.created_at|d }}</td>
+      <td class="nowrap"><form method="post" action="/review/{{ i.id }}" class="inline"><input type="hidden" name="status" value="resolved"><button class="small">resolved</button></form>
+        <form method="post" action="/review/{{ i.id }}" class="inline"><input type="hidden" name="status" value="dismissed"><button class="small">dismiss</button></form></td>
+    </tr>{% endfor %}
+  </table>
+  {% else %}{{ empty("Nothing waiting.") }}{% endif %}
+</section>
+
+<section class="card">
+  <h2>Jobs needing review ({{ q.jobs|length }})</h2>
+  {% if q.jobs %}
+  <table class="table">
+    {% for j in q.jobs %}<tr>
+      <td>{{ score(j.relevance_score) }}</td>
+      <td><a href="/jobs/{{ j.id }}">{{ j.title }}</a> <span class="muted small">{{ j.company_name or "" }}</span>
+        <div class="small">{{ (j.match_details.review_reasons or [])|join("; ") }}</div>
+        {% if j.match_details.missing_info %}<div class="small muted">missing: {{ j.match_details.missing_info|join(", ") }}</div>{% endif %}</td>
+      <td>{{ badge(j.eligibility) }}</td>
+      <td class="nowrap">{% for a, l in [("shortlist","shortlist"),("dismiss","dismiss"),("reviewed","keep")] %}
+        <form method="post" action="/review/job/{{ j.id }}" class="inline"><input type="hidden" name="action" value="{{ a }}"><button class="small">{{ l }}</button></form>{% endfor %}</td>
+    </tr>{% endfor %}
+  </table>
+  {% else %}{{ empty("No jobs flagged.") }}{% endif %}
+</section>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Drafts awaiting approval ({{ q.drafts|length }})</h2>
+  {% for d in q.drafts %}<div><a href="/drafts/{{ d.id }}">{{ d.subject }}</a>{% if d.missing_fields %} {{ badge("missing info", "b-warn") }}{% endif %}</div>
+  {% else %}{{ empty("None.") }}{% endfor %}
+</section>
+<section class="card">
+  <h2>Profile suggestions</h2>
+  {% if q.unverified_skills %}<p>{{ q.unverified_skills }} unverified skill(s) — <a href="/profile#skills">confirm or remove them</a>.</p>
+  {% else %}{{ empty("None.") }}{% endif %}
+</section>
+</div>
+{% endblock %}

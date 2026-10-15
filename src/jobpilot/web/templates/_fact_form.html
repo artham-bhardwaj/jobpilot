@@ -1,0 +1,20 @@
+{# Generic fact form. Expects: kind, fields, obj (optional), action #}
+<form method="post" action="{{ action }}">
+  <div class="form-grid">
+  {% for name, label, type, options in fields %}
+    {% set val = obj[name] if obj is defined and obj else none %}
+    {% if val is not none and name == "technologies" and val is not string %}{% set val = val|join(", ") %}{% endif %}
+    {% if type == "textarea" %}
+      <label class="field full"><span>{{ label }}</span><textarea name="{{ name }}" rows="3">{{ val if val is not none else '' }}</textarea></label>
+    {% elif type == "select" %}
+      <label class="field"><span>{{ label }}</span><select name="{{ name }}">
+        {% for opt in options %}{% if opt is string %}{% set ov, ol = opt, (opt or "—") %}{% else %}{% set ov, ol = opt[0], opt[1] %}{% endif %}
+          <option value="{{ ov }}" {% if val is not none and val|string == ov %}selected{% endif %}>{{ ol }}</option>{% endfor %}
+      </select></label>
+    {% else %}
+      <label class="field"><span>{{ label }}</span><input type="{{ type }}" name="{{ name }}" {% if type == "number" %}step="0.1"{% endif %} value="{{ val if val is not none else '' }}"></label>
+    {% endif %}
+  {% endfor %}
+  </div>
+  <div class="actions"><button class="primary" type="submit">Save</button></div>
+</form>

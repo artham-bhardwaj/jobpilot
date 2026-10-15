@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, score, post_button %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block content %}
+<p><a href="/jobs">← Jobs</a></p>
+<h1>{{ job.title }}</h1>
+<p>
+  <b>{{ job.company_name or "Company not stated" }}</b> · {{ job.location or "location not stated" }} · {{ job.remote_type }}
+  {% if job.employment_type %} · {{ job.employment_type }}{% endif %}
+  {% if job.department %} · {{ job.department }}{% endif %}
+  <br>{{ badge(job.status) }} {{ badge(job.user_status) }} {{ badge(job.eligibility) }}
+  {% if job.repost_of_id %}<a href="/jobs/{{ job.repost_of_id }}">{{ badge("repost of #" ~ job.repost_of_id, "b-warn") }}</a>{% endif %}
+</p>
+<div class="actions">
+  {% if job.source_url %}<a class="button" href="{{ job.source_url }}" target="_blank" rel="noopener noreferrer">View posting ↗</a>{% endif %}
+  {% if job.apply_url %}<a class="button" href="{{ job.apply_url }}" target="_blank" rel="noopener noreferrer">Apply page ↗</a>{% endif %}
+  {% block job_primary_actions %}{% endblock %}
+  {% for st in ["shortlisted", "dismissed", "new"] if st != job.user_status %}
+    {{ post_button("/jobs/" ~ job.id ~ "/status", {"shortlisted": "Shortlist", "dismissed": "Dismiss", "new": "Reset triage"}[st], hidden={"status": st}) }}
+  {% endfor %}
+  {{ post_button("/jobs/" ~ job.id ~ "/rematch", "Re-score") }}
+  {{ post_button("/jobs/" ~ job.id ~ "/check", "Check still open") }}
+  {% if job.status == "active" %}{{ post_button("/jobs/" ~ job.id ~ "/expire", "Mark expired", confirm="Mark this job as expired?") }}{% endif %}
+</div>
+
+{% if not job.matched_at %}<div class="notice warn">This job hasn't been scored with your current profile and settings yet. Click <b>Re-score</b>.</div>{% endif %}
+{% if m.review_reasons %}<div class="notice warn"><b>Needs your review:</b> {{ m.review_reasons|join("; ") }}</div>{% endif %}
+
+<div class="grid-2">
+<section class="card">
+  <h2>Relevance {{ score(job.relevance_score) }} <span class="muted small">threshold {{ m.relevance.threshold if m.relevance else "" }}</span></h2>
+  {% if m.relevance and m.relevance.excluded_by %}<div class="notice bad">Excluded by keyword(s): {{ m.relevance.excluded_by|join(", ") }}</div>{% endif %}
+  {% if m.relevance %}
+  <table class="table compact">
+    {% for c in m.relevance.components %}<tr><td class="nowrap">{{ c.name }}</td><td class="nowrap">{{ c.points }} / {{ c.max }}</td><td class="wrap">{{ c.explanation }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  {% if m.category %}<p class="small muted">Category: {{ m.category.label or "none" }} (confidence {{ m.category.confidence }})</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Eligibility {{ badge(job.eligibility) }}</h2>
+  <p class="muted small">Based on the posting's stated requirements and your <b>confirmed</b> profile facts. Unknown
+  requirements are never treated as met.</p>
+  {% if m.eligibility %}
+  <table class="table compact">
+    {% for c in m.eligibility.checks %}<tr><td class="nowrap">{{ c.name }}</td><td>{{ badge(c.status) }}</td><td class="wrap">{{ c.explanation }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  {% if m.missing_info %}<p class="small"><b>Missing information:</b> {{ m.missing_info|join(", ") }}</p>{% endif %}
+</section>
+</div>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Skills</h2>
+  {% if m.skills %}
+    <p><b>Required:</b> {% for s in m.skills.mandatory %}<span class="tag {{ 'have' if s in m.skills.have else ('learn' if s in m.skills.learning else 'miss') }}">{{ s }}</span>{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
+    <p><b>Preferred:</b> {% for s in m.skills.preferred %}<span class="tag {{ 'have' if s in m.skills.have else ('learn' if s in m.skills.learning else 'miss') }}">{{ s }}</span>{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
+    {% if m.skills.alternatives %}<p class="small muted">Alternatives (any one suffices): {% for g in m.skills.alternatives %}{{ g|join(" / ") }}{% if not loop.last %}; {% endif %}{% endfor %}</p>{% endif %}
+    <p class="small muted"><span class="tag have">have</span> confirmed · <span class="tag learn">learning</span> · <span class="tag miss">missing</span></p>
+  {% endif %}
+  {% if m.requirements %}
+  <table class="kv small">
+    <tr><th>Experience</th><td>{% if m.requirements.experience_min_years is not none %}{{ m.requirements.experience_min_years }}{% if m.requirements.experience_max_years %}–{{ m.requirements.experience_max_years }}{% endif %} years <span class="muted">("{{ m.requirements.experience_evidence }}")</span>{% else %}not stated{% endif %}</td></tr>
+    <tr><th>Level</th><td>{{ job.experience_level or "not stated" }}</td></tr>
+    <tr><th>Sponsorship</th><td>{{ m.requirements.sponsorship|replace("_", " ") }}</td></tr>
+    <tr><th>Degree</th><td>{{ m.requirements.degree_required or "not stated" }}</td></tr>
+    <tr><th>Location constraints</th><td>{{ m.requirements.location_constraints|join("; ") or "none stated" }}{% if m.requirements.relocation_offered %} · relocation offered{% endif %}</td></tr>
+    <tr><th>Salary</th><td>{% if job.salary_min or job.salary_max %}{{ "{:,}".format(job.salary_min) if job.salary_min else "?" }} – {{ "{:,}".format(job.salary_max) if job.salary_max else "?" }} {{ job.salary_currency or "" }} {{ job.salary_period or "" }}{% else %}not stated{% endif %}</td></tr>
+    <tr><th>Posted</th><td>{{ job.posted_at|d }}{% if job.valid_through %} · open until {{ job.valid_through|d }}{% endif %}</td></tr>
+  </table>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Resume for this job</h2>
+  {% if selection.missing %}
+    <div class="notice bad">{{ selection.reason }} <a href="/resumes">Resume library →</a></div>
+  {% else %}
+    <p><b>{{ selection.version.resume.name }} v{{ selection.version.version_no }}</b>
+      <a href="/resumes/versions/{{ selection.version.id }}/download">download</a>
+      {% if selection.fallback %}{{ badge("fallback", "b-warn") }}{% endif %}</p>
+    <p class="small">{{ selection.reason }}</p>
+    {% if selection.fallback %}<div class="notice warn small">No resume is tailored to this category. Consider adding an approved one — JobPilot will not write it for you.</div>{% endif %}
+    {% if selection.alternatives %}<details><summary class="small">alternatives</summary><ul class="small">
+      {% for a in selection.alternatives %}<li>{{ a.resume }} ({{ a.category }}) — covers {{ a.coverage }} job skill(s)</li>{% endfor %}</ul></details>{% endif %}
+  {% endif %}
+  {% block job_resume_extra %}{% endblock %}
+</section>
+</div>
+
+{% include "_job_application.html" ignore missing %}
+
+<section class="card" id="outreach">
+  <h2>Contacts &amp; outreach</h2>
+  {% if new_posting_emails %}
+    <div class="notice">The posting lists: {{ new_posting_emails|join(", ") }}
+      {{ post_button("/jobs/" ~ job.id ~ "/contacts-from-posting", "Record as contact(s)", "small") }}</div>
+  {% endif %}
+  {% if contacts %}
+  <div class="table-wrap"><table class="table compact">
+    {% for c in contacts %}<tr><td><a href="/contacts/{{ c.id }}">{{ c.display_name }}</a> <span class="muted small">{{ c.title or c.role_type }}</span>
+      {% if c.do_not_contact %}{{ badge("do not contact", "b-do_not_contact") }}{% endif %}</td>
+      <td>{% if c.email %}{{ c.email }} {{ badge(c.email_status) }}{% endif %}</td>
+      <td class="small muted">{{ c.source_type }} · {{ (c.confidence * 100)|round|int }}%</td>
+      <td>{% if not c.do_not_contact %}<form method="post" action="/drafts" class="inline">
+        <input type="hidden" name="job_id" value="{{ job.id }}"><input type="hidden" name="contact_id" value="{{ c.id }}"><input type="hidden" name="back" value="/jobs/{{ job.id }}">
+        <select name="template_key">{% for t in templates %}<option value="{{ t.key }}">{{ kind_labels.get(t.kind, t.name) }}</option>{% endfor %}</select>
+        <button class="small">draft</button></form>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+  {% else %}<p class="muted">No contacts recorded for this company. Recruiter emails are only drafted when you have real contact data.</p>{% endif %}
+  <p><a class="button small" href="/contacts?job_id={{ job.id }}">Add a contact for this job</a></p>
+  {% if drafts %}<h3>Drafts</h3>
+    {% for d in drafts %}<div><a href="/drafts/{{ d.id }}">{{ d.subject }}</a> {{ badge(d.status) }}</div>{% endfor %}{% endif %}
+</section>
+
+<section class="card">
+  <h2>Description</h2>
+  {% if job.description_text %}<div class="desc">{{ job.description_text }}</div>{% else %}{{ empty("No description captured.") }}{% endif %}
+</section>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Provenance</h2>
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Source</th><th>Method</th><th>First seen</th><th>Last seen</th><th>Times</th></tr></thead>
+    {% for s in job.sightings %}
+      <tr><td class="wrap">{{ s.source.name if s.source else "—" }}{% if s.url %}<div class="small"><a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.url[:60] }}</a></div>{% endif %}</td>
+        <td>{{ s.method }}</td><td class="nowrap">{{ s.first_seen_at|dt }}</td><td class="nowrap">{{ s.seen_at|dt }}</td><td>{{ s.times_seen }}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="small muted">Job #{{ job.id }} · external id {{ job.external_id or "—" }} · first seen {{ job.first_seen_at|dt }}{% if job.expired_at %} · expired {{ job.expired_at|dt }}{% endif %}</p>
+</section>
+<section class="card">
+  <h2>Notes</h2>
+  <form method="post" action="/jobs/{{ job.id }}/notes">
+    <textarea name="notes" rows="5">{{ job.notes or "" }}</textarea>
+    <div class="actions"><button>Save notes</button></div>
+  </form>
+</section>
+</div>
+{% endblock %}

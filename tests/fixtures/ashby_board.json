@@ -1,0 +1,11 @@
+{"jobs": [
+  {"id": "11111111-aaaa-4bbb-8ccc-000000000001", "title": "Backend Engineer (Python)", "department": "Engineering", "team": "Platform",
+   "employmentType": "FullTime", "location": "Remote - India", "isListed": true, "isRemote": true, "workplaceType": "Remote",
+   "publishedAt": "2026-10-03T08:00:00.000Z", "jobUrl": "https://jobs.ashbyhq.com/samplelabs/11111111-aaaa-4bbb-8ccc-000000000001",
+   "applyUrl": "https://jobs.ashbyhq.com/samplelabs/11111111-aaaa-4bbb-8ccc-000000000001/application",
+   "descriptionPlain": "Requirements:\n- 1+ years of experience with Python and FastAPI\n- PostgreSQL\nNice to have:\n- Docker",
+   "compensation": {"compensationTierSummary": "INR 15L - 22L"}},
+  {"id": "11111111-aaaa-4bbb-8ccc-000000000002", "title": "Unlisted Role", "isListed": false, "descriptionPlain": "hidden"},
+  {"id": "11111111-aaaa-4bbb-8ccc-000000000003", "title": "Data Analyst (Hybrid)", "location": "Pune", "isRemote": false,
+   "workplaceType": "Hybrid", "jobUrl": "https://jobs.ashbyhq.com/samplelabs/3", "descriptionHtml": "<p>SQL and statistics.</p>"}
+]}

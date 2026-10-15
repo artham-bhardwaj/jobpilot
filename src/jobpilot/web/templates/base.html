@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}JobPilot{% endblock %} · JobPilot</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232f5bd3'/%3E%3Cpath d='M5 4h6v2H9v5a2 2 0 0 1-4 0h2V6H5z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+{% set nav = [
+  ("Overview", "/", "Home"),
+  ("Jobs", "/jobs", "Work"),
+  ("Review queue", "/review", "Work"),
+  ("Applications", "/applications", "Work"),
+  ("Interviews", "/interviews", "Work"),
+  ("Profile", "/profile", "You"),
+  ("Resumes", "/resumes", "You"),
+  ("Skill gaps", "/skills", "You"),
+  ("Contacts", "/contacts", "Outreach"),
+  ("Email drafts", "/drafts", "Outreach"),
+  ("Analytics", "/analytics", "Insight"),
+  ("Sources", "/sources", "System"),
+  ("Settings", "/settings", "System"),
+  ("System", "/system", "System"),
+] %}
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="hamburger" aria-hidden="true">☰</label>
+  <a href="/" class="brand">JobPilot</a>
+  <span class="topbar-note">local · {{ settings.host }}</span>
+</header>
+<nav class="sidebar">
+  {% set ns = namespace(group=None) %}
+  {% for label, href, group in nav %}
+    {% if group != ns.group %}<div class="nav-group">{{ group }}</div>{% set ns.group = group %}{% endif %}
+    {% set active = (href == "/" and request.url.path == "/") or (href != "/" and request.url.path.startswith(href)) %}
+    <a href="{{ href }}" class="{{ 'active' if active }}">{{ label }}</a>
+  {% endfor %}
+</nav>
+<main class="content">
+  {% if msg %}<div class="flash ok" role="status">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="flash err" role="alert">{{ err }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

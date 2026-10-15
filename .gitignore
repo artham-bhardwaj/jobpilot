@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+client_secret*.json
+credentials*.json
+token*.json
+
+# Local data: databases, resumes, backups, logs, browser profiles, tokens
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+browser_profile/
+secrets/
+backups/
+logs/
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+deploy/systemd/

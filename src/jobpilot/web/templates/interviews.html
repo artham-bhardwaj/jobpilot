@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select, textarea %}
+{% block title %}Interviews{% endblock %}
+{% block content %}
+<h1>Interviews</h1>
+<p class="muted">Interviews are only added by you. Pasted or Gmail-imported invitations become suggestions you confirm.</p>
+
+<section class="card">
+  <h2>Upcoming</h2>
+  {% if upcoming %}
+  <table class="table">
+    {% for i in upcoming %}<tr><td class="nowrap">{{ i.scheduled_at|dt if i.scheduled_at else "date TBD" }} {{ i.timezone or "" }}</td>
+      <td><a href="/interviews/{{ i.id }}">{{ i.application.job.title }}</a> · {{ i.application.job.company_name or "?" }}</td>
+      <td>round {{ i.round_no }}{% if i.round_name %} · {{ i.round_name }}{% endif %}</td><td>{{ i.stage|replace("_"," ") }}</td><td>{{ i.format }}</td>
+      <td>{% if i.prep_packs %}{{ badge("prep ready", "b-ok") }}{% endif %}</td></tr>{% endfor %}
+  </table>
+  {% else %}{{ empty("No upcoming interviews.") }}{% endif %}
+</section>
+
+<div class="grid-2">
+<section class="card" id="new">
+  <h2>{{ "Confirm suggested interview" if prefill.suggestion_id else "Add interview" }}</h2>
+  {% if prefill.suggestion_id %}<div class="notice warn">Extracted automatically — check every field against the original message.
+    {% if prefill.time_known is sameas false %}<b>No time was found; set it yourself.</b>{% endif %}
+    {% if prefill.excerpt %}<details><summary>original text</summary><pre>{{ prefill.excerpt }}</pre></details>{% endif %}</div>{% endif %}
+  {% if apps %}
+  <form method="post" action="/interviews">
+    {% if prefill.suggestion_id %}<input type="hidden" name="suggestion_id" value="{{ prefill.suggestion_id }}">{% endif %}
+    <div class="form-grid">
+      <label class="field"><span>Application *</span><select name="application_id">
+        {% for a in apps %}<option value="{{ a.id }}" {% if prefill.application_id == a.id %}selected{% endif %}>{{ a.job.title }} · {{ a.job.company_name or "?" }} ({{ a.status }})</option>{% endfor %}</select></label>
+      {{ field("round_name", "Round name") }}
+      {{ select("stage", "Stage", stages, prefill.stage) }}
+      {{ select("format", "Format", formats, prefill.format) }}
+      {{ field("scheduled_at", "Date & time (local)", (prefill.scheduled_at or "")[:16], type="datetime-local") }}
+      {{ field("timezone", "Time zone", prefill.timezone, placeholder="IST") }}
+      {{ field("duration_minutes", "Duration (min)", type="number") }}
+      {{ field("location_or_link", "Link / location", prefill.location_or_link) }}
+      {{ field("interviewers", "Interviewers") }}
+    </div>
+    {{ textarea("notes", "Notes", rows=2) }}
+    <div class="actions"><button class="primary">Save interview</button></div>
+  </form>
+  {% else %}<p class="muted">Interviews attach to submitted applications. Record a submission first.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Extract from an invitation email</h2>
+  <p class="muted small">Paste the email text. JobPilot looks for a date/time, a meeting or assessment link and the
+  round type, then asks you to confirm.</p>
+  {% if apps %}
+  <form method="post" action="/applications/{{ apps[0].id }}/invitation" data-action-template="/applications/{id}/invitation">
+    <label class="field"><span>Application</span><select data-action-id>{% for a in apps %}<option value="{{ a.id }}">{{ a.job.title }} · {{ a.job.company_name or "?" }}</option>{% endfor %}</select></label>
+    <label class="field"><span>Email text</span><textarea name="text" rows="6" required></textarea></label>
+    <div class="actions"><button>Extract</button></div>
+  </form>
+  {% endif %}
+  <p class="small"><a href="/gmail">Gmail import (optional) →</a></p>
+</section>
+</div>
+
+<section class="card">
+  <h2>Past &amp; cancelled</h2>
+  {% if past %}
+  <table class="table compact">
+    {% for i in past %}<tr><td class="nowrap">{{ i.scheduled_at|dt }}</td><td><a href="/interviews/{{ i.id }}">{{ i.application.job.title }}</a> · {{ i.application.job.company_name or "?" }}</td>
+      <td>{{ i.stage|replace("_"," ") }}</td><td>{{ badge(i.status) }}</td><td>{{ badge(i.outcome) }}</td>
+      <td>{% if i.follow_up_actions and not i.follow_up_done %}{{ badge("follow-up open", "b-warn") }}{% endif %}</td></tr>{% endfor %}
+  </table>
+  {% else %}{{ empty("None yet.") }}{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select, textarea %}
+{% block title %}Sources{% endblock %}
+{% block content %}
+<h1>Job sources</h1>
+<p class="muted">Each source is one company board or a fixed list of career pages. JobPilot only reads public job
+postings from sources you configure; it does not crawl the web and cannot see every job. Check each site's terms
+before adding it. Requests are rate-limited ({{ settings.http_min_interval_seconds }}s/host) and robots.txt is
+{{ "respected" if settings.respect_robots_txt else "NOT checked (disabled in .env)" }}.</p>
+
+<section class="card">
+  <div class="actions" style="margin-top:0">
+    <form method="post" action="/sources/run" class="inline"><button class="primary">Run all enabled sources now</button></form>
+  </div>
+  {% if sources %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Name</th><th>Type</th><th>Config</th><th>Enabled</th><th>Last run</th><th>Result</th><th></th></tr></thead>
+    <tbody>
+    {% for s in sources %}
+      <tr>
+        <td><a href="/jobs?source_id={{ s.id }}&status=">{{ s.name }}</a>{% if s.company_name %}<div class="muted small">{{ s.company_name }}</div>{% endif %}</td>
+        <td>{{ adapters[s.kind].label if s.kind in adapters else s.kind }}</td>
+        <td class="wrap small"><code>{{ s.config|tojson }}</code></td>
+        <td>{{ "yes" if s.enabled else "no" }}</td>
+        <td class="nowrap">{{ s.last_run_at|dt }}</td>
+        <td class="wrap small">{% if s.last_status %}{{ badge(s.last_status) }}{% endif %}
+          {% if s.last_stats %}<div class="muted">{% for k, v in s.last_stats.items() if v and k != "errors" %}{{ k }} {{ v }} {% endfor %}</div>{% endif %}
+          {% if s.last_error %}<details><summary>errors</summary><pre>{{ s.last_error }}</pre></details>{% endif %}</td>
+        <td class="nowrap">
+          {% if s.kind in adapters %}
+          <form method="post" action="/sources/run" class="inline"><input type="hidden" name="source_id" value="{{ s.id }}"><button class="small">run</button></form>
+          <a class="button small" href="/sources?edit={{ s.id }}#form">edit</a>
+          {% endif %}
+          <form method="post" action="/sources/{{ s.id }}/delete" class="inline" data-confirm="Remove this source? Jobs already collected are kept."><button class="small danger">remove</button></form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("No sources configured yet.") }}{% endif %}
+</section>
+
+<section class="card" id="form">
+  <h2>{{ "Edit source" if editing else "Add source" }}</h2>
+  <form method="post" action="/sources{% if editing %}/{{ editing.id }}{% endif %}">
+    <div class="form-grid">
+      {{ field("name", "Name", editing.name if editing else none, required=True) }}
+      {{ select("kind", "Type", adapters.items()|map("list")|map("first")|list, editing.kind if editing else none) }}
+      {{ field("company_name", "Company name", editing.company_name if editing else none, help="Used when the board doesn't state it") }}
+      <label class="checkbox"><input type="checkbox" name="enabled" value="1" {% if not editing or editing.enabled %}checked{% endif %}> enabled</label>
+    </div>
+    {{ textarea("config", "Configuration (JSON)", (editing.config|tojson) if editing else "{}", rows=3) }}
+    {{ textarea("terms_note", "Terms / permission note (optional)", editing.terms_note if editing else none, rows=2) }}
+    <div class="actions"><button class="primary">Save</button>{% if editing %}<a href="/sources" class="button">Cancel</a>{% endif %}</div>
+  </form>
+  <h3>Configuration formats</h3>
+  <table class="kv">{% for k, a in adapters.items() %}<tr><th>{{ k }}</th><td><code>{{ a.config_help }}</code></td></tr>{% endfor %}</table>
+</section>
+{% endblock %}

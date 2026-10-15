@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, select %}
+{% block title %}Email drafts{% endblock %}
+{% block content %}
+<h1>Email draft center</h1>
+<p class="muted">Drafts are built from templates and your verified facts. Nothing is ever sent automatically: approve a
+draft, then send it yourself (copy) or through Gmail if you've connected it. <a href="/drafts/templates">Edit templates →</a></p>
+
+{% if due %}
+<section class="card">
+  <h2>Follow-ups due ({{ due|length }})</h2>
+  <p class="muted small">No reply recorded, contact not opted out, application still open.</p>
+  <table class="table compact">
+    {% for d in due %}<tr><td><a href="/drafts/{{ d.id }}">{{ d.subject }}</a></td><td>{{ d.contact.display_name if d.contact else d.to_address }}</td>
+      <td class="nowrap">sent {{ d.sent_at|d }} · due {{ d.follow_up_due_at|d }}</td>
+      <td><form method="post" action="/drafts/{{ d.id }}/followup" class="inline"><button class="small primary">draft follow-up</button></form>
+          <form method="post" action="/drafts/{{ d.id }}/reply" class="inline"><button class="small">they replied</button></form></td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>New draft</h2>
+  <form method="post" action="/drafts" class="filters">
+    {{ select("template_key", "Template", templates|map(attribute="key")|list) }}
+    <label class="field"><span>Job</span><select name="job_id"><option value="">—</option>
+      {% for j in jobs %}<option value="{{ j.id }}">{{ j.title }} · {{ j.company_name or "?" }}</option>{% endfor %}</select></label>
+    <label class="field"><span>Contact</span><select name="contact_id"><option value="">—</option>
+      {% for c in contacts %}<option value="{{ c.id }}">{{ c.display_name }}{% if c.company %} · {{ c.company.name }}{% endif %}</option>{% endfor %}</select></label>
+    <div class="actions"><button class="primary">Create</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <p>Show: {% for s in ["", "draft", "approved", "sent", "cancelled"] %}<a href="/drafts?status={{ s }}" {% if status == s %}style="font-weight:700"{% endif %}>{{ s or "all" }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+  {% if drafts %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Subject</th><th>Type</th><th>To</th><th>Job</th><th>Status</th><th>Updated</th></tr></thead>
+    {% for d in drafts %}
+      <tr><td><a href="/drafts/{{ d.id }}">{{ d.subject }}</a>{% if d.missing_fields %} {{ badge("missing info", "b-warn") }}{% endif %}</td>
+        <td class="small">{{ kind_labels.get(d.kind, d.kind) }}</td>
+        <td class="small">{{ d.to_address or "—" }}</td>
+        <td class="small">{% if d.job %}<a href="/jobs/{{ d.job.id }}">{{ d.job.title }}</a>{% endif %}</td>
+        <td>{{ badge(d.status) }}{% if d.reply_received_at %} {{ badge("replied", "b-ok") }}{% endif %}</td>
+        <td class="nowrap small">{{ d.updated_at|dt }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}{{ empty("No drafts.") }}{% endif %}
+</section>
+{% endblock %}

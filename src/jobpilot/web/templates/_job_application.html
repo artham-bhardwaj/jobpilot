@@ -1,0 +1,15 @@
+{# Application panel on the job detail page #}
+{% from "_macros.html" import badge %}
+<section class="card" id="application">
+  <h2>Application</h2>
+  {% if application %}
+    <p><a href="/applications/{{ application.id }}">Application #{{ application.id }}</a> {{ badge(application.status) }}
+      {% if application.applied_at %}· applied {{ application.applied_at|d }}{% endif %}</p>
+  {% else %}
+    {% if duplicates %}<div class="notice warn">Possible duplicate of: {% for a, r in duplicates %}<a href="/applications/{{ a.id }}">#{{ a.id }}</a> ({{ r }}){% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
+    <form method="post" action="/jobs/{{ job.id }}/application" class="filters">
+      {% if duplicates %}<label class="field"><span>Why this isn't a duplicate</span><input type="text" name="override_note" required></label>{% endif %}
+      <div class="actions"><button class="primary">Start application (prepare)</button></div>
+    </form>
+  {% endif %}
+</section>

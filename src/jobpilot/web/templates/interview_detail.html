@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select, textarea, post_button %}
+{% block title %}Interview{% endblock %}
+{% block content %}
+<p><a href="/interviews">← Interviews</a></p>
+<h1>{{ iv.application.job.title }} <span class="muted">· {{ iv.application.job.company_name or "?" }}</span></h1>
+<p>Round {{ iv.round_no }}{% if iv.round_name %} · {{ iv.round_name }}{% endif %} · {{ iv.stage|replace("_"," ") }} · {{ iv.format }}
+  · {{ iv.scheduled_at|dt if iv.scheduled_at else "date TBD" }} {{ iv.timezone or "" }} {{ badge(iv.status) }} {{ badge(iv.outcome) }}
+  {% if iv.source == "email" %}{{ badge("from email", "b-preparing") }}{% endif %}</p>
+<p>{% if iv.location_or_link %}{% if iv.location_or_link.startswith("http") %}<a href="{{ iv.location_or_link }}" target="_blank" rel="noopener noreferrer">{{ iv.location_or_link }}</a>{% else %}{{ iv.location_or_link }}{% endif %}{% endif %}
+  · <a href="/applications/{{ iv.application_id }}">application</a> · <a href="/jobs/{{ iv.application.job_id }}">job</a></p>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Outcome &amp; follow-up</h2>
+  <form method="post" action="/interviews/{{ iv.id }}/outcome">
+    <div class="form-grid">
+      {{ select("status", "Status", ["scheduled","completed","cancelled","rescheduled","no_show"], iv.status) }}
+      {{ select("outcome", "Outcome", ["pending","passed","failed","unknown"], iv.outcome) }}
+    </div>
+    {{ textarea("feedback", "Feedback / your notes", iv.feedback, rows=3) }}
+    {{ textarea("follow_up_actions", "Follow-up actions", iv.follow_up_actions, rows=2) }}
+    <label class="checkbox"><input type="checkbox" name="follow_up_done" value="1" {% if iv.follow_up_done %}checked{% endif %}> follow-up done</label>
+    <div class="actions"><button class="primary">Save</button></div>
+  </form>
+  <h3>Thank-you note</h3>
+  {% for d in thank_you %}<div><a href="/drafts/{{ d.id }}">{{ d.subject }}</a> {{ badge(d.status) }}</div>{% endfor %}
+  <form method="post" action="/drafts" class="inline"><input type="hidden" name="template_key" value="thank_you">
+    <input type="hidden" name="interview_id" value="{{ iv.id }}"><input type="hidden" name="back" value="/interviews/{{ iv.id }}">
+    <button class="small">Draft thank-you email</button></form>
+</section>
+
+<section class="card">
+  <h2>Edit details</h2>
+  <form method="post" action="/interviews/{{ iv.id }}">
+    <input type="hidden" name="application_id" value="{{ iv.application_id }}">
+    <div class="form-grid">
+      {{ field("round_no", "Round #", iv.round_no, type="number") }}
+      {{ field("round_name", "Round name", iv.round_name) }}
+      {{ select("stage", "Stage", stages, iv.stage) }}
+      {{ select("format", "Format", formats, iv.format) }}
+      {{ field("scheduled_at", "Date & time", iv.scheduled_at.strftime("%Y-%m-%dT%H:%M") if iv.scheduled_at else none, type="datetime-local") }}
+      {{ field("timezone", "Time zone", iv.timezone) }}
+      {{ field("duration_minutes", "Duration", iv.duration_minutes, type="number") }}
+      {{ field("location_or_link", "Link / location", iv.location_or_link) }}
+      {{ field("interviewers", "Interviewers", iv.interviewers) }}
+    </div>
+    {{ textarea("notes", "Notes", iv.notes, rows=2) }}
+    <div class="actions"><button>Save details</button></div>
+  </form>
+</section>
+</div>
+
+<section class="card prep" id="prep">
+  <h2>Preparation pack</h2>
+  {{ post_button("/interviews/" ~ iv.id ~ "/prep", "Regenerate" if pack else "Generate preparation pack", "primary") }}
+  {% if pack %}{% set c = pack.content %}
+    <p class="muted small">Generated {{ pack.generated_at|dt }} from the job description, your confirmed profile, the submitted resume
+      ({{ c.header.resume or "none recorded" }}) and the interview stage.</p>
+    {% for n in c.notes %}<div class="notice small">{{ n }}</div>{% endfor %}
+    <h3>Job skills</h3>
+    <p>You have: {% for s in c.job_skills_you_have %}<span class="tag have">{{ s }}</span>{% else %}<span class="muted">none confirmed</span>{% endfor %}</p>
+    <p>Review: {% for s in c.job_skills_to_review %}<span class="tag miss">{{ s }}</span>{% else %}<span class="muted">none</span>{% endfor %}</p>
+    {% for sec in c.sections %}
+      <h3>{{ sec.title }}</h3>
+      <ul>{% for it in sec["items"] %}<li>{{ it }}</li>{% endfor %}</ul>
+      <p class="small"><b>Practice:</b> {{ sec.practice|join(" · ") }}</p>
+    {% endfor %}
+    <h3>Stories from your verified experience</h3><ul>{% for s in c.stories %}<li>{{ s }}</li>{% endfor %}</ul>
+    <h3>Questions to ask</h3><ul>{% for q in c.questions_to_ask %}<li>{{ q }}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">Not generated yet.</p>{% endif %}
+</section>
+{% endblock %}

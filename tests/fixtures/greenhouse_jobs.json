@@ -1,0 +1,9 @@
+{"jobs": [
+  {"id": 1001, "title": "Software Engineer I, Backend (Java)", "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/1001",
+   "location": {"name": "Bengaluru, India"}, "updated_at": "2026-10-01T10:00:00-04:00", "first_published": "2026-09-30T09:00:00-04:00",
+   "departments": [{"name": "Engineering"}],
+   "content": "&lt;h3&gt;About the role&lt;/h3&gt;&lt;p&gt;Build Spring Boot microservices. Hybrid, 3 days in office.&lt;/p&gt;&lt;h3&gt;Requirements&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;1+ years of experience with Java&lt;/li&gt;&lt;li&gt;Spring Boot and REST APIs&lt;/li&gt;&lt;li&gt;SQL (PostgreSQL)&lt;/li&gt;&lt;/ul&gt;&lt;h3&gt;Nice to have&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;Kafka&lt;/li&gt;&lt;li&gt;Docker&lt;/li&gt;&lt;/ul&gt;&lt;p&gt;Questions? Write to recruiting.team@example.com&lt;/p&gt;"},
+  {"id": 1002, "title": "Senior Staff Engineer, Platform", "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/1002",
+   "location": {"name": "Remote"}, "updated_at": "2026-10-02T10:00:00Z",
+   "content": "&lt;h3&gt;Requirements&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;10+ years of experience building distributed systems&lt;/li&gt;&lt;li&gt;Go, Kubernetes&lt;/li&gt;&lt;/ul&gt;"}
+]}

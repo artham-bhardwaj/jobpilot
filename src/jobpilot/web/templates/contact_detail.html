@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select, textarea %}
+{% block title %}{{ c.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/contacts">← Contacts</a></p>
+<h1>{{ c.display_name }}</h1>
+<p>{{ c.title or "" }} {% if c.company %}· {{ c.company.name }}{% endif %} · {{ c.role_type }}
+  {% if c.do_not_contact %}{{ badge("do not contact", "b-do_not_contact") }}{% endif %}</p>
+{% if blocked %}<div class="notice bad">{{ blocked }}</div>{% endif %}
+{% if c.email_status == "guessed" %}<div class="notice bad">This email address is <b>guessed</b> — it has not been verified and may reach the wrong person.</div>{% endif %}
+
+<div class="grid-2">
+<section class="card">
+  <h2>Details &amp; provenance</h2>
+  <table class="kv">
+    <tr><th>Email</th><td>{{ c.email or "—" }} {% if c.email %}{{ badge(c.email_status) }}{% endif %}</td></tr>
+    <tr><th>Profile</th><td>{% if c.linkedin_url %}<a href="{{ c.linkedin_url }}" target="_blank" rel="noopener noreferrer">{{ c.linkedin_url }}</a>{% else %}—{% endif %}</td></tr>
+    <tr><th>Phone</th><td>{{ c.phone or "—" }}</td></tr>
+    <tr><th>Source</th><td>{{ c.source_type }}{% if c.source_url %} · <a href="{{ c.source_url }}" target="_blank" rel="noopener noreferrer">{{ c.source_url[:60] }}</a>{% endif %}{% if c.source_note %}<div class="small muted">{{ c.source_note }}</div>{% endif %}</td></tr>
+    <tr><th>Confidence</th><td>{{ (c.confidence * 100)|round|int }}%</td></tr>
+    <tr><th>Discovered</th><td>{{ c.discovered_at|dt }}</td></tr>
+    <tr><th>Verified</th><td>{% if c.verified_at %}{{ c.verified_at|dt }} — {{ c.verification_note }}{% else %}no{% endif %}</td></tr>
+    {% if c.relationship_note %}<tr><th>Relationship</th><td>{{ c.relationship_note }}</td></tr>{% endif %}
+    {% if c.job %}<tr><th>Found on job</th><td><a href="/jobs/{{ c.job.id }}">{{ c.job.title }}</a></td></tr>{% endif %}
+    {% if c.dnc_reason %}<tr><th>DNC reason</th><td>{{ c.dnc_reason }}</td></tr>{% endif %}
+  </table>
+  {% if c.email and c.email_status != "verified" %}
+  <form method="post" action="/contacts/{{ c.id }}/verify" class="filters" style="margin-top:10px">
+    {{ field("note", "How did you verify it?", placeholder="e.g. they replied from this address", required=True) }}
+    <div class="actions"><button>Mark email verified</button></div>
+  </form>
+  {% endif %}
+  <form method="post" action="/contacts/{{ c.id }}/dnc" class="actions">
+    {% if c.do_not_contact %}<input type="hidden" name="flag" value="0"><button>Clear do-not-contact</button>
+    {% else %}<input type="hidden" name="flag" value="1"><input type="text" name="reason" placeholder="reason (optional)" style="max-width:220px"><button class="danger">Mark do-not-contact</button>{% endif %}
+  </form>
+</section>
+
+<section class="card">
+  <h2>Draft an email</h2>
+  {% if c.do_not_contact or blocked %}<p class="muted">Drafting is disabled for do-not-contact contacts.</p>
+  {% else %}
+  <form method="post" action="/drafts">
+    <input type="hidden" name="contact_id" value="{{ c.id }}"><input type="hidden" name="back" value="/contacts/{{ c.id }}">
+    {% if c.job_id %}<input type="hidden" name="job_id" value="{{ c.job_id }}">{% endif %}
+    {{ select("template_key", "Template", templates|map(attribute="key")|list) }}
+    <div class="actions"><button class="primary">Create draft</button></div>
+  </form>
+  {% endif %}
+  <h3>Drafts &amp; messages</h3>
+  {% for d in drafts %}<div><a href="/drafts/{{ d.id }}">{{ d.subject }}</a> {{ badge(d.status) }} <span class="muted small">{{ d.updated_at|d }}</span></div>
+  {% else %}{{ empty("None.") }}{% endfor %}
+</section>
+</div>
+
+<section class="card">
+  <h2>Contact history</h2>
+  {% if c.interactions %}
+  <table class="table compact">
+    <thead><tr><th>When</th><th>Channel</th><th>Direction</th><th>Summary</th></tr></thead>
+    {% for i in c.interactions %}<tr><td class="nowrap">{{ i.ts|dt }}</td><td>{{ i.channel }}</td><td>{{ i.direction }}</td><td class="wrap">{{ i.summary }}</td></tr>{% endfor %}
+  </table>
+  {% else %}{{ empty("No interactions logged.") }}{% endif %}
+  <form method="post" action="/contacts/{{ c.id }}/interaction" class="filters">
+    {{ select("channel", "Channel", ["email","linkedin","phone","in_person","other"]) }}
+    {{ select("direction", "Direction", ["outbound","inbound"]) }}
+    {{ field("summary", "Summary (what actually happened)", required=True) }}
+    <div class="actions"><button>Log interaction</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <details><summary>Edit contact</summary>
+    {% with action="/contacts/" ~ c.id, prefill_job=none %}{% include "_contact_form.html" %}{% endwith %}
+  </details>
+  <form method="post" action="/contacts/{{ c.id }}/delete" class="actions" data-confirm="Delete this contact and its history?"><button class="danger">Delete contact</button></form>
+</section>
+{% endblock %}

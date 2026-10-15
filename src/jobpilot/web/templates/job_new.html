@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "_macros.html" import field, textarea, select %}
+{% block title %}Add jobs{% endblock %}
+{% block content %}
+<p><a href="/jobs">← Jobs</a></p>
+<h1>Add or import jobs</h1>
+
+<div class="grid-2">
+<section class="card">
+  <h2>From a job URL</h2>
+  <p class="muted small">Greenhouse and Lever job URLs are read through their public posting APIs. Other pages are read
+  for schema.org <code>JobPosting</code> data; if none exists, only the title and visible text are captured (flagged for review).
+  robots.txt and rate limits are respected. Pages behind logins are not supported.</p>
+  <form method="post" action="/jobs/url">
+    {{ field("url", "Job posting URL", type="url", required=True) }}
+    {{ field("company_name", "Company (optional, if the page doesn't say)") }}
+    <div class="actions"><button class="primary">Fetch &amp; add</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Import a file</h2>
+  <p class="muted small">CSV or JSON. Recognised columns: <code>title</code> (required), <code>company</code>, <code>location</code>,
+  <code>description</code>, <code>url</code>, <code>apply_url</code>, <code>posted_at</code>, <code>remote_type</code>,
+  <code>external_id</code>, <code>salary_min</code>, <code>salary_max</code>, <code>currency</code>. Duplicates are merged.</p>
+  <form method="post" action="/jobs/import" enctype="multipart/form-data">
+    <label class="field"><span>File</span><input type="file" name="file" accept=".csv,.json" required></label>
+    <div class="actions"><button class="primary">Import</button></div>
+  </form>
+</section>
+</div>
+
+<section class="card">
+  <h2>Enter manually</h2>
+  <form method="post" action="/jobs/manual">
+    <div class="form-grid">
+      {{ field("title", "Title", required=True) }}
+      {{ field("company_name", "Company") }}
+      {{ field("location", "Location") }}
+      {{ select("remote_type", "Work mode", [("", "not stated"), ("remote","remote"), ("hybrid","hybrid"), ("onsite","onsite")]) }}
+      {{ field("source_url", "Posting URL", type="url") }}
+      {{ field("apply_url", "Application URL", type="url") }}
+      {{ field("posted_at", "Posted on", type="date") }}
+      {{ field("salary_min", "Salary min", type="number") }}
+      {{ field("salary_max", "Salary max", type="number") }}
+      {{ field("salary_currency", "Currency") }}
+    </div>
+    {{ textarea("description_text", "Job description (paste the full text)", rows=12) }}
+    <div class="actions"><button class="primary">Add job</button></div>
+  </form>
+</section>
+{% endblock %}

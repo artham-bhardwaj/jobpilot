@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty %}
+{% block title %}System{% endblock %}
+{% block content %}
+<h1>System</h1>
+
+<section class="card">
+  <h2>Health {{ badge("ok" if health.ok else "attention", "b-ok" if health.ok else "b-warn") }}</h2>
+  <table class="kv">
+    <tr><th>Version</th><td>{{ health.version }}</td></tr>
+    {% for name, c in health.checks.items() %}
+    <tr><th>{{ name|replace("_", " ") }}</th><td>{{ "✔" if c.ok else "✖" }} {{ c.detail }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Backups</h2>
+  <p class="muted">Backups include the database and stored files (resumes, evidence) but not OAuth tokens or the
+  browser profile. Restoring first saves the current state as a new backup.</p>
+  <form method="post" action="/system/backup" class="inline"><button class="primary">Create backup now</button></form>
+  {% if backups %}
+  <table class="table">
+    <thead><tr><th>File</th><th>Size</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+    {% for b in backups %}
+      <tr>
+        <td><a href="/system/backup/{{ b.name }}">{{ b.name }}</a></td>
+        <td>{{ (b.size / 1024)|round(1) }} KB</td>
+        <td>{{ b.modified|dt }}</td>
+        <td>
+          <form method="post" action="/system/restore" class="inline" data-confirm="Restore {{ b.name }}? Current data will be replaced (a backup of it is taken first).">
+            <input type="hidden" name="name" value="{{ b.name }}">
+            <input type="text" name="confirm" placeholder="type RESTORE" size="10" aria-label="Type RESTORE to confirm">
+            <button>Restore</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}{{ empty("No backups yet.") }}{% endif %}
+</section>
+
+<section class="card" id="tasks">
+  <h2>Scheduled tasks</h2>
+  <p class="muted small">Run manually here, or enable them under Settings → <code>scheduler</code>. They run only while your
+  computer is on: either with <code>JOBPILOT_SCHEDULER_ENABLED=true</code> (inside <code>jobpilot serve</code>, currently
+  <b>{{ "on" if settings.scheduler_enabled else "off" }}</b>) or via the systemd user timer (<code>jobpilot scheduler systemd</code>).</p>
+  <table class="table compact">
+    <thead><tr><th>Task</th><th>Enabled</th><th>Every</th><th>Last success</th><th>Due</th><th></th></tr></thead>
+    {% for name, last in sched_tasks %}{% set c = sched_cfg.tasks.get(name, {}) %}
+      <tr><td>{{ name }}</td><td>{{ "yes" if c.enabled else "no" }}</td><td>{{ c.every_hours }} h</td><td>{{ last|dt }}</td>
+        <td>{{ "yes" if name in sched_due else "" }}</td>
+        <td><form method="post" action="/system/tasks/{{ name }}" class="inline"><button class="small">run now</button></form></td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Task runs</h2>
+  {% if runs %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>#</th><th>Task</th><th>Trigger</th><th>Started</th><th>Finished</th><th>Status</th><th>Attempts</th><th>Message</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr><td>{{ r.id }}</td><td>{{ r.task_name }}</td><td>{{ r.trigger }}</td><td>{{ r.started_at|dt }}</td>
+        <td>{{ r.finished_at|dt }}</td><td>{{ badge(r.status) }}</td><td>{{ r.attempts }}</td>
+        <td class="wrap">{{ r.message or "" }}{% if r.details %}<details><summary>details</summary><pre>{{ r.details|tojson(indent=1) }}</pre></details>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("No tasks have run yet.") }}{% endif %}
+</section>
+
+<section class="card">
+  <h2>Logs</h2>
+  <p>Filter:
+    <a href="/system">all</a> · <a href="/system?level=INFO">info</a> · <a href="/system?level=WARNING">warning</a> · <a href="/system?level=ERROR">error</a>
+    <span class="muted">— file: <code>{{ settings.log_dir }}/jobpilot.log</code></span></p>
+  {% if logs %}
+  <div class="table-wrap log-box"><table class="table compact">
+    <thead><tr><th>Time (UTC)</th><th>Level</th><th>Logger</th><th>Message</th></tr></thead>
+    <tbody>
+    {% for e in logs %}
+      <tr class="lvl-{{ e.level|lower }}"><td class="nowrap">{{ e.ts }}</td><td>{{ e.level }}</td><td>{{ e.logger }}</td>
+        <td class="wrap">{{ e.msg }}{% for k, v in e.items() if k not in ("ts","level","logger","msg") %} <span class="muted">{{ k }}={{ v if v is string else v|tojson }}</span>{% endfor %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("No log entries.") }}{% endif %}
+</section>
+
+<section class="card" id="privacy">
+  <h2>Your data</h2>
+  <p class="muted small">All data stays on this computer under <code>{{ settings.data_path }}</code>. Nothing is sent anywhere
+  unless you enable an integration (job-source fetching, Gmail).</p>
+  <div class="actions"><a class="button" href="/system/export.json">Export everything (JSON)</a> <a class="button" href="/analytics#export">CSV exports</a></div>
+  <form method="post" action="/system/delete" class="filters" data-confirm="Permanently delete this data?">
+    <label class="field"><span>Delete</span><select name="scope">
+      <option value="profile">profile &amp; facts (skills, employment, education, projects, links, learning)</option>
+      <option value="contacts">contacts &amp; contact history</option>
+      <option value="outreach">email drafts</option>
+      <option value="everything">everything (all records, resumes, evidence, browser profile, Gmail token)</option></select></label>
+    <label class="checkbox"><input type="checkbox" name="include_backups" value="1"> also delete all backups (otherwise a safety backup is taken first)</label>
+    <label class="field"><span>Type DELETE</span><input type="text" name="confirm" autocomplete="off"></label>
+    <div class="actions"><button class="danger">Delete</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Audit log</h2>
+  {% if audit_entries %}
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Time (UTC)</th><th>Actor</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for a in audit_entries %}
+      <tr><td class="nowrap">{{ a.ts|dt }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td>
+        <td>{{ a.entity_type or "" }}{% if a.entity_id %} #{{ a.entity_id }}{% endif %}</td>
+        <td class="wrap muted">{{ a.details|tojson if a.details else "" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("No audited actions yet.") }}{% endif %}
+</section>
+{% endblock %}

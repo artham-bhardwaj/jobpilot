@@ -1,0 +1,12 @@
+[
+  {"id": "aaaaaaaa-1111-2222-3333-444444444444", "text": "Python Backend Developer",
+   "categories": {"location": "Remote - India", "team": "Engineering", "commitment": "Full-time"},
+   "workplaceType": "remote", "createdAt": 1790000000000,
+   "descriptionPlain": "Fictional Labs builds data tooling.",
+   "lists": [{"text": "What you need", "content": "<li>2-4 years of experience in Python</li><li>Django or FastAPI</li><li>PostgreSQL</li>"},
+             {"text": "Bonus points", "content": "<li>AWS</li><li>Celery</li>"}],
+   "additionalPlain": "We cannot sponsor visas for this role.",
+   "hostedUrl": "https://jobs.lever.co/fictionallabs/aaaaaaaa-1111-2222-3333-444444444444",
+   "applyUrl": "https://jobs.lever.co/fictionallabs/aaaaaaaa-1111-2222-3333-444444444444/apply",
+   "salaryRange": {"min": 1500000, "max": 2400000, "currency": "INR", "interval": "per-year-salary"}}
+]

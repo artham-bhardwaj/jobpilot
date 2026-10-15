@@ -1,0 +1,51 @@
+{% macro badge(value, kind=None) -%}
+  <span class="badge {{ kind or ('b-' ~ (value or 'none')|string|lower|replace(' ', '_')) }}">{{ value if value is not none else '—' }}</span>
+{%- endmacro %}
+
+{% macro empty(text) -%}
+  <p class="empty">{{ text }}</p>
+{%- endmacro %}
+
+{% macro field(name, label, value=None, type="text", required=False, placeholder="", help=None, step=None) -%}
+  <label class="field">
+    <span>{{ label }}{% if required %} *{% endif %}</span>
+    <input type="{{ type }}" name="{{ name }}" value="{{ value if value is not none else '' }}"
+           {% if required %}required{% endif %} {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+           {% if step %}step="{{ step }}"{% endif %}>
+    {% if help %}<small>{{ help }}</small>{% endif %}
+  </label>
+{%- endmacro %}
+
+{% macro textarea(name, label, value=None, rows=4, help=None, required=False) -%}
+  <label class="field">
+    <span>{{ label }}{% if required %} *{% endif %}</span>
+    <textarea name="{{ name }}" rows="{{ rows }}" {% if required %}required{% endif %}>{{ value if value is not none else '' }}</textarea>
+    {% if help %}<small>{{ help }}</small>{% endif %}
+  </label>
+{%- endmacro %}
+
+{% macro select(name, label, options, value=None, blank=False, help=None) -%}
+  <label class="field">
+    <span>{{ label }}</span>
+    <select name="{{ name }}">
+      {% if blank %}<option value="">—</option>{% endif %}
+      {% for opt in options %}
+        {% if opt is string %}{% set ov, ol = opt, opt %}{% else %}{% set ov, ol = opt[0], opt[1] %}{% endif %}
+        <option value="{{ ov }}" {% if value is not none and ov|string == value|string %}selected{% endif %}>{{ ol }}</option>
+      {% endfor %}
+    </select>
+    {% if help %}<small>{{ help }}</small>{% endif %}
+  </label>
+{%- endmacro %}
+
+{% macro score(value) -%}
+  {% if value is none %}<span class="score s-none">—</span>
+  {% else %}<span class="score {{ 's-high' if value >= 70 else ('s-mid' if value >= 45 else 's-low') }}">{{ value|round|int }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro post_button(action, label, cls="", confirm=None, hidden={}) -%}
+  <form method="post" action="{{ action }}" class="inline" {% if confirm %}data-confirm="{{ confirm }}"{% endif %}>
+    {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <button type="submit" class="{{ cls }}">{{ label }}</button>
+  </form>
+{%- endmacro %}

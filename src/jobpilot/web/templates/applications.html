@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty %}
+{% block title %}Applications{% endblock %}
+{% block content %}
+<h1>Application pipeline</h1>
+<p class="muted">Start an application from a job's page. An application becomes <b>applied</b> only after you approve
+submission, submit it yourself, and record confirmation evidence.</p>
+<div class="pipeline">
+  {% for s in statuses %}
+  <div class="col">
+    <h3>{{ s|replace("_", " ") }} ({{ by_status[s]|length }})</h3>
+    {% for a in by_status[s] %}
+      <div class="item"><a href="/applications/{{ a.id }}">{{ a.job.title }}</a>
+        <div class="muted small">{{ a.job.company_name or "?" }}{% if a.applied_at %} · applied {{ a.applied_at|d }}{% endif %}</div>
+        {% if not a.resume_version_id and s in ("preparing","ready_for_review") %}{{ badge("no resume", "b-warn") }}{% endif %}
+      </div>
+    {% else %}<div class="muted small">—</div>{% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

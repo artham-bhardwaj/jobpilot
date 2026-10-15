@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select %}
+{% block title %}Resumes{% endblock %}
+{% block content %}
+<h1>Resume library</h1>
+<p class="muted">Each resume targets a role category and has immutable versions. New versions start as
+<b>draft</b>; only <b>approved</b> versions are selected for applications. Files are stored unchanged.</p>
+
+{% if not resumes %}
+<section class="card">
+  <p>No resumes yet. Create the standard slots (Master, Java Backend, SDE I, General SWE, Python Backend, AI/ML),
+  then import your existing resume files into them.</p>
+  <form method="post" action="/resumes/slots"><button class="primary">Create standard resume slots</button></form>
+</section>
+{% endif %}
+
+{% if resumes %}
+<section class="card">
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Resume</th><th>Category</th><th>Versions</th><th>Selected version</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for r in resumes %}
+      {% set la = r.latest_approved %}
+      <tr>
+        <td><a href="/resumes/{{ r.id }}">{{ r.name }}</a>{% if r.is_master %} {{ badge("master", "b-preparing") }}{% endif %}</td>
+        <td>{{ categories[r.category].label if r.category in categories else r.category }}</td>
+        <td>{{ r.versions|length }}</td>
+        <td>{% if la %}v{{ la.version_no }} · {{ la.original_filename }}{% else %}<span class="muted">none approved</span>{% endif %}</td>
+        <td>{% if not r.active %}{{ badge("inactive", "b-archived") }}{% elif la %}{{ badge("approved") }}{% else %}{{ badge("needs file", "b-warn") }}{% endif %}</td>
+        <td><form method="post" action="/resumes/{{ r.id }}/toggle" class="inline"><button class="small">{{ "deactivate" if r.active else "activate" }}</button></form></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <form method="post" action="/resumes/slots" class="actions"><button class="small">Add any missing standard slots</button></form>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>New resume</h2>
+  <form method="post" action="/resumes">
+    <div class="form-grid">
+      {{ field("name", "Name", required=True) }}
+      {{ select("category", "Category", category_options) }}
+    </div>
+    <div class="actions"><button>Create</button></div>
+  </form>
+</section>
+{% endblock %}

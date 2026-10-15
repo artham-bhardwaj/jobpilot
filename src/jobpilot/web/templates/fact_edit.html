@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ label }}{% endblock %}
+{% block content %}
+<p><a href="/profile#{{ kind }}">← Profile</a></p>
+<h1>Edit {{ label|lower }} #{{ obj.id }}</h1>
+<section class="card">
+  {% if obj.status == "confirmed" %}<div class="notice warn">This fact is confirmed. Saving your edits keeps it confirmed only if you leave status as "confirmed" — make sure it is still accurate.</div>{% endif %}
+  {% set action = "/profile/" ~ kind ~ "/" ~ obj.id %}
+  {% include "_fact_form.html" %}
+</section>
+{% endblock %}

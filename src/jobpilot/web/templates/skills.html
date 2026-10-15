@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select %}
+{% block title %}Skill gaps{% endblock %}
+{% block content %}
+<h1>Skill-gap analysis</h1>
+<p class="muted">Skills your target jobs ask for, compared with your <b>confirmed</b> skills. Priority weighs how often a
+skill is required (×2) or preferred (×1) by how relevant those jobs are.</p>
+
+<form method="get" class="filters card">
+  <label class="field"><span>Jobs analysed</span><select name="scope">
+    {% for v, l in [("relevant","relevant + shortlisted + applied"),("shortlisted","shortlisted + applied"),("all","all active")] %}<option value="{{ v }}" {% if scope == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Role category</span><select name="category"><option value="">any</option>
+    {% for k, c in categories.items() %}<option value="{{ k }}" {% if category == k %}selected{% endif %}>{{ c.label }}</option>{% endfor %}</select></label>
+  <div class="actions"><button class="primary">Analyse</button></div>
+</form>
+
+<section class="card">
+  <h2>Recurring gaps <span class="muted small">across {{ r.jobs_analyzed }} job(s)</span></h2>
+  {% if r.jobs_analyzed == 0 %}{{ empty("No jobs in scope yet. Collect and score some jobs first.") }}
+  {% elif r.gaps %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Skill</th><th>Your status</th><th>Required in</th><th>Preferred in</th><th>Share of jobs</th><th>Priority</th><th>Examples</th><th></th></tr></thead>
+    {% for g in r.gaps[:40] %}<tr>
+      <td><b>{{ g.skill }}</b><div class="muted small">{{ g.category or "" }}</div></td>
+      <td>{{ badge(g.status) }}</td><td>{{ g.mandatory }}</td><td>{{ g.preferred }}</td>
+      <td>{{ g.share|pct }}</td><td>{{ g.priority }}</td>
+      <td class="small">{% for jid, title, comp in g.examples[:3] %}<a href="/jobs/{{ jid }}">{{ title }}</a>{% if comp %} ({{ comp }}){% endif %}<br>{% endfor %}</td>
+      <td>{% if g.backlog %}{{ badge(g.backlog.status) }}{% else %}<form method="post" action="/skills/backlog" class="inline"><input type="hidden" name="skill" value="{{ g.skill }}"><input type="hidden" name="priority" value="{{ g.priority }}"><button class="small">add to backlog</button></form>{% endif %}</td>
+    </tr>{% endfor %}
+  </table></div>
+  {% if r.jobs_analyzed < 5 %}<p class="notice warn small">Based on only {{ r.jobs_analyzed }} job(s) — treat as indicative.</p>{% endif %}
+  {% else %}{{ empty("No gaps: you have confirmed every recognised skill in these jobs.") }}{% endif %}
+</section>
+
+<section class="card" id="backlog">
+  <h2>Learning backlog</h2>
+  <p class="muted small">Track progress freely; a skill becomes <b>confirmed</b> only when you confirm it with evidence.</p>
+  {% for li in backlog %}
+  <details class="card" style="margin-bottom:8px">
+    <summary><b>{{ li.skill_name }}</b> {{ badge(li.status) }} <span class="muted small">{{ li.progress_pct }}%{% if li.target_date %} · target {{ li.target_date|d }}{% endif %}{% if li.priority %} · priority {{ li.priority }}{% endif %}</span></summary>
+    <div class="bar" style="margin:8px 0"><div style="width: {{ li.progress_pct }}%"></div></div>
+    {% if li.status != "done" %}
+    <form method="post" action="/skills/backlog/{{ li.id }}">
+      <div class="form-grid">
+        {{ select("status", "Status", statuses|reject("equalto","done")|list, li.status) }}
+        {{ field("progress_pct", "Progress % (self-reported, max 95)", li.progress_pct, type="number") }}
+        {{ field("target_date", "Target date", li.target_date, type="date") }}
+      </div>
+      <label class="field"><span>Resources</span><textarea name="resources" rows="2">{{ li.resources or "" }}</textarea></label>
+      <label class="field"><span>Notes</span><textarea name="notes" rows="2">{{ li.notes or "" }}</textarea></label>
+      <div class="actions"><button>Update</button></div>
+    </form>
+    <form method="post" action="/skills/backlog/{{ li.id }}" class="filters" data-confirm="Confirm '{{ li.skill_name }}' as a skill you can claim?">
+      <input type="hidden" name="action" value="confirm">
+      {{ field("evidence", "Evidence you can point to (project, certificate, work use)", required=True) }}
+      <div class="actions"><button class="primary">Confirm skill</button></div>
+    </form>
+    {% else %}<p class="small">Confirmed {{ li.completed_at|d }} — {{ li.evidence_of_mastery }}</p>{% endif %}
+  </details>
+  {% else %}{{ empty("Empty. Add gaps from the table above.") }}{% endfor %}
+</section>
+
+{% if r.strengths %}
+<section class="card">
+  <h2>Strengths in demand</h2>
+  {% for s in r.strengths[:20] %}<span class="tag have">{{ s.skill }} · {{ s.jobs }}</span>{% endfor %}
+</section>
+{% endif %}
+{% endblock %}

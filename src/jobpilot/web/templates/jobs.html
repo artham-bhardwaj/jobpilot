@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, score %}
+{% block title %}Jobs{% endblock %}
+{% block content %}
+<h1>Job explorer</h1>
+<div class="actions" style="margin:-6px 0 12px">
+  <a class="button primary" href="/jobs/new">Add / import jobs</a>
+  <a class="button" href="/sources">Sources</a>
+  <form method="post" action="/jobs/rematch" class="inline"><button>Re-score all</button></form>
+  <span class="muted small">Only jobs from your configured sources and imports — not the whole internet.</span>
+</div>
+
+<form method="get" action="/jobs" class="filters card">
+  <label class="field"><span>Search</span><input type="search" name="q" value="{{ filters.q or '' }}" placeholder="title, company, text"></label>
+  <label class="field"><span>Category</span><select name="category"><option value="">any</option>
+    {% for k, c in categories.items() %}<option value="{{ k }}" {% if filters.category == k %}selected{% endif %}>{{ c.label }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Eligibility</span><select name="eligibility"><option value="">any</option>
+    {% for e in ["eligible","likely_eligible","unknown","ineligible"] %}<option {% if filters.eligibility == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Work mode</span><select name="remote"><option value="">any</option>
+    {% for e in ["remote","hybrid","onsite","unknown"] %}<option {% if filters.remote == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Min score</span><input type="number" name="min_score" min="0" max="100" value="{{ filters.min_score if filters.min_score is not none else '' }}" placeholder="{{ threshold }}"></label>
+  <label class="field"><span>Posted within</span><select name="posted_within_days"><option value="">any time</option>
+    {% for d in [1,3,7,14,30] %}<option value="{{ d }}" {% if filters.posted_within_days == d %}selected{% endif %}>{{ d }} days</option>{% endfor %}</select></label>
+  <label class="field"><span>Triage</span><select name="user_status"><option value="">not dismissed</option>
+    {% for e in ["new","shortlisted","dismissed"] %}<option {% if filters.user_status == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Status</span><select name="status">
+    {% for v, l in [("active","active"),("expired","expired"),("","all")] %}<option value="{{ v }}" {% if (filters.status or "") == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Source</span><select name="source_id"><option value="">any</option>
+    {% for s in sources %}<option value="{{ s.id }}" {% if filters.source_id == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Sort</span><select name="sort">
+    {% for v in ["relevance","newest","posted","company","title"] %}<option {% if filters.sort == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+  <div class="actions"><button class="primary">Apply</button><a href="/jobs" class="button">Reset</a></div>
+</form>
+
+<p class="muted">{{ total }} job(s){% if pages > 1 %} · page {{ page }} of {{ pages }}{% endif %}</p>
+{% if jobs %}
+<div class="table-wrap card" style="padding:0"><table class="table">
+  <thead><tr><th>Score</th><th>Job</th><th>Category</th><th>Eligibility</th><th>Mode</th><th>Posted / seen</th><th></th></tr></thead>
+  <tbody>
+  {% for j in jobs %}
+    <tr>
+      <td>{{ score(j.relevance_score) }}</td>
+      <td class="wrap"><a href="/jobs/{{ j.id }}"><b>{{ j.title }}</b></a><div class="muted small">{{ j.company_name or "unknown company" }} · {{ j.location or "location not stated" }}</div>
+        {% if j.repost_of_id %}{{ badge("repost", "b-warn") }}{% endif %}{% if j.status == "expired" %}{{ badge("expired") }}{% endif %}
+        {% if j.user_status != "new" %}{{ badge(j.user_status) }}{% endif %}
+        {% if j.match_details and j.match_details.needs_review %}{{ badge("needs review", "b-needs_review") }}{% endif %}</td>
+      <td>{{ categories[j.category].label if j.category in categories else "—" }}</td>
+      <td>{{ badge(j.eligibility) }}</td>
+      <td>{{ j.remote_type }}</td>
+      <td class="nowrap small">{{ j.posted_at|d }}<div class="muted">seen {{ j.first_seen_at|d }}</div></td>
+      <td class="nowrap">
+        {% if j.user_status != "shortlisted" %}<form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="shortlisted"><input type="hidden" name="next" value="{{ request.url.path }}?{{ request.url.query }}"><button class="small">shortlist</button></form>{% endif %}
+        {% if j.user_status != "dismissed" %}<form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="dismissed"><input type="hidden" name="next" value="{{ request.url.path }}?{{ request.url.query }}"><button class="small">dismiss</button></form>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% if pages > 1 %}<div class="actions">
+  {% if page > 1 %}<a class="button" href="/jobs?{{ base_qs }}&page={{ page - 1 }}">← prev</a>{% endif %}
+  {% if page < pages %}<a class="button" href="/jobs?{{ base_qs }}&page={{ page + 1 }}">next →</a>{% endif %}
+</div>{% endif %}
+{% else %}{{ empty("No jobs match. Add a source, paste a job URL, or import a CSV/JSON file.") }}{% endif %}
+{% endblock %}

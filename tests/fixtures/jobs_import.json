@@ -1,0 +1,8 @@
+{"jobs": [
+  {"title": "Python Developer", "company": "Demo Widgets", "location": "Remote", "remote_type": "remote",
+   "description": "Requirements: Python, Django. 0-2 years of experience.", "url": "https://careers.example.org/jobs/py-1",
+   "posted_at": "2026-10-09", "external_id": 501, "salary_min": "900000", "salary_max": "1,400,000", "currency": "INR"},
+  {"title": "ML Intern", "company": "Placeholder Systems", "remote_type": "sometimes", "url": "javascript:alert(1)", "salary_min": "n/a"},
+  {"company": "No Title Ltd"},
+  "not-an-object"
+]}

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, select, post_button, score %}
+{% block title %}Application #{{ app.id }}{% endblock %}
+{% block content %}
+<p><a href="/applications">← Pipeline</a></p>
+<h1>{{ job.title }} <span class="muted">· {{ job.company_name or "?" }}</span></h1>
+<p>{{ badge(app.status) }} {{ score(job.relevance_score) }} {{ badge(job.eligibility) }} · <a href="/jobs/{{ job.id }}">job details</a>
+  {% if app.apply_url %} · <a href="{{ app.apply_url }}" target="_blank" rel="noopener noreferrer">application page ↗</a>{% endif %}</p>
+{% if duplicates %}<div class="notice warn">Possible duplicates: {% for a, r in duplicates %}<a href="/applications/{{ a.id }}">#{{ a.id }}</a> ({{ r }}){% if not loop.last %}, {% endif %}{% endfor %}
+  {% if app.duplicate_override_note %}<br>Your note: {{ app.duplicate_override_note }}{% endif %}</div>{% endif %}
+{% if job.eligibility in ("ineligible", "unknown") %}<div class="notice warn">Eligibility is <b>{{ job.eligibility }}</b> — check the job page before applying.</div>{% endif %}
+
+<section class="card">
+  <h2>Status</h2>
+  <form method="post" action="/applications/{{ app.id }}/status" class="filters">
+    <label class="field"><span>Move to</span><select name="to">{% for s in next_states %}<option>{{ s }}</option>{% endfor %}</select></label>
+    {{ field("note", "Note") }}
+    <div class="actions"><button {% if not next_states %}disabled{% endif %}>Update status</button></div>
+  </form>
+  <table class="table compact">
+    {% for e in app.events|reverse %}<tr><td class="nowrap">{{ e.ts|dt }}</td><td>{{ e.from_status or "—" }} → <b>{{ e.to_status }}</b></td><td>{{ e.note or "" }}</td><td class="muted">{{ e.actor }}</td></tr>{% endfor %}
+  </table>
+</section>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Resume</h2>
+  {% if app.resume_version %}
+    <p><b>{{ app.resume_version.label }}</b> · <a href="/resumes/versions/{{ app.resume_version.id }}/download">download</a>
+      <span class="muted small">sha256 {{ app.resume_version.sha256[:12] }}…</span></p>
+    <p class="small muted">{{ app.resume_selection_reason or "" }}</p>
+  {% else %}<div class="notice bad">No resume selected. {{ app.resume_selection_reason or "" }} <a href="/resumes">Resume library →</a></div>{% endif %}
+  {% if app.status not in ("applied","assessment","interview","offer","rejected") and approved_versions %}
+  <form method="post" action="/applications/{{ app.id }}/resume" class="filters">
+    <label class="field"><span>Use a different approved version</span><select name="version_id">
+      {% for r, v in approved_versions %}<option value="{{ v.id }}" {% if v.id == app.resume_version_id %}selected{% endif %}>{{ r.name }} v{{ v.version_no }}</option>{% endfor %}</select></label>
+    <div class="actions"><button>Select</button></div>
+  </form>
+  {% elif app.applied_at %}<p class="small muted">Frozen: this is the exact version submitted.</p>{% endif %}
+</section>
+
+<section class="card" id="checklist">
+  <h2>Preparation checklist</h2>
+  <ul class="checklist">
+  {% for key, item in checklist.items() %}
+    <li>{% if item.auto %}{{ "✔" if item.done else "✖" }} {{ item.label }} <span class="muted small">(automatic)</span>
+      {% else %}<form method="post" action="/applications/{{ app.id }}/check" class="inline"><input type="hidden" name="key" value="{{ key }}"><input type="hidden" name="done" value="{{ '0' if item.done else '1' }}">
+        <button class="small">{{ "✔" if item.done else "☐" }}</button></form> {{ item.label }}{% endif %}
+      {% if item.required %}<span class="muted small">*</span>{% endif %}</li>
+  {% endfor %}
+  </ul>
+</section>
+</div>
+
+{% if app.status in ("preparing", "ready_for_review") %}
+<div class="grid-2">
+<section class="card">
+  <h2>Assisted browser fill</h2>
+  {% if site %}<p class="small">Supported form: <b>{{ site }}</b>. JobPilot fills only confirmed profile fields and attaches the selected resume.
+    It pauses on CAPTCHA, login, MFA, consent/legal questions and unknown questions, and <b>never clicks submit</b>.</p>
+  {% else %}<p class="small">This site isn't a supported hosted form, so no autofill will happen; the page opens for you. Use the manual workflow below.</p>{% endif %}
+  {% if browser_enabled %}{{ post_button("/applications/" ~ app.id ~ "/assist", "Open in browser" ~ (" & autofill" if site else ""), "primary") }}
+  {% else %}<p class="muted small">Disabled. Set <code>JOBPILOT_BROWSER_ENABLED=true</code> in <code>.env</code> and install <code>.[browser]</code>.</p>{% endif %}
+  {% if app.browser_runs %}
+  <h3>Runs</h3>
+  {% for r in app.browser_runs %}
+    <div class="small">{{ r.started_at|dt }} · {{ badge(r.status) }} {{ r.message or "" }}
+      {% if r.filled_fields %}<details><summary>filled ({{ r.filled_fields|length }})</summary><ul>{% for f in r.filled_fields %}<li>{{ f }}</li>{% endfor %}</ul></details>{% endif %}
+      {% if r.unknown_fields %}<details open><summary>needs you ({{ r.unknown_fields|length }})</summary><ul>{% for f in r.unknown_fields %}<li>{{ f }}</li>{% endfor %}</ul></details>{% endif %}
+      {% if r.pause_reasons %}<div class="notice warn">{{ r.pause_reasons|join("; ") }}</div>{% endif %}
+    </div>
+  {% endfor %}{% endif %}
+</section>
+
+<section class="card">
+  <h2>Manual workflow</h2>
+  <ol class="small">
+    <li>Open the <a href="{{ app.apply_url }}" target="_blank" rel="noopener noreferrer">application page</a>.</li>
+    <li>Upload {% if app.resume_version %}<a href="/resumes/versions/{{ app.resume_version.id }}/download">{{ app.resume_version.original_filename }}</a>{% else %}your resume{% endif %}.</li>
+    <li>Copy confirmed details below; answer every other question yourself.</li>
+    <li>Submit, then save the confirmation (email text, page text or screenshot) under Evidence.</li>
+  </ol>
+  {% if manual %}<table class="table compact">{% for label, value in manual %}<tr><td>{{ label }}</td><td id="mf{{ loop.index }}">{{ value }}</td><td><button type="button" class="small" data-copy="mf{{ loop.index }}">copy</button></td></tr>{% endfor %}</table>
+  {% else %}<p class="muted small">Confirm your profile to see copyable details.</p>{% endif %}
+</section>
+</div>
+{% endif %}
+
+<section class="card" id="submit">
+  <h2>Submission</h2>
+  {% if app.applied_at %}
+    <p>{{ badge("applied") }} {{ app.applied_at|dt }} · confirmed via <b>{{ app.confirmation_method }}</b>{% if app.confirmation_note %} — {{ app.confirmation_note }}{% endif %}</p>
+  {% elif app.status == "ready_for_review" %}
+    {% if not app.submission_approved_at %}
+      <p>Review everything above. When you are satisfied, approve submission — then submit on the employer's site yourself.</p>
+      {{ post_button("/applications/" ~ app.id ~ "/approve-submission", "Approve submission", "primary", confirm="Approve submitting this application with " ~ (app.resume_version.label if app.resume_version else "no resume") ~ "?") }}
+    {% else %}
+      <p class="small">Submission approved {{ app.submission_approved_at|dt }}. After submitting, add confirmation evidence below, then record it.</p>
+      <form method="post" action="/applications/{{ app.id }}/submitted" class="filters">
+        {{ select("method", "Confirmation type", confirmation_kinds) }}
+        {{ field("note", "Note (e.g. confirmation number)") }}
+        <label class="checkbox"><input type="checkbox" name="attest" value="1" required> I actually submitted this application and received confirmation</label>
+        <div class="actions"><button class="primary">Record submission</button></div>
+      </form>
+    {% endif %}
+  {% else %}<p class="muted">Move the application to “ready for review” when preparation is complete.</p>{% endif %}
+</section>
+
+{% if app.applied_at %}
+<section class="card">
+  <h2>Interviews</h2>
+  <p><a class="button" href="/interviews?application_id={{ app.id }}#new">Add interview</a></p>
+</section>
+{% endif %}
+
+<section class="card" id="evidence">
+  <h2>Evidence</h2>
+  {% for e in app.evidence %}
+    <div class="small">{{ e.created_at|dt }} · <b>{{ e.kind }}</b>{% if e.file_path %} · <a href="/applications/evidence/{{ e.id }}">{{ e.original_filename }}</a>{% endif %}
+      {% if e.text %}<details><summary>text</summary><pre>{{ e.text }}</pre></details>{% endif %}</div>
+  {% else %}{{ empty("No evidence yet.") }}{% endfor %}
+  <form method="post" action="/applications/{{ app.id }}/evidence" enctype="multipart/form-data" class="filters">
+    {{ select("kind", "Type", evidence_kinds) }}
+    <label class="field"><span>Text (paste confirmation email / page text)</span><textarea name="text" rows="2"></textarea></label>
+    <label class="field"><span>File (pdf, png, jpg, txt, eml, html)</span><input type="file" name="file"></label>
+    <div class="actions"><button>Add evidence</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Notes</h2>
+  <form method="post" action="/applications/{{ app.id }}/notes"><textarea name="notes" rows="4">{{ app.notes or "" }}</textarea><div class="actions"><button>Save</button></div></form>
+</section>
+{% endblock %}

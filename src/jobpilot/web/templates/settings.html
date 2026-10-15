@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="muted">Runtime preferences stored in the local database. Environment configuration
+(integrations, server binding, HTTP politeness) lives in <code>.env</code> — see <code>.env.example</code>.</p>
+
+<section class="card">
+  <h2>Environment (read-only)</h2>
+  <table class="kv">
+    <tr><th>Data directory</th><td><code>{{ settings.data_path }}</code></td></tr>
+    <tr><th>Server</th><td>{{ settings.host }}:{{ settings.port }}</td></tr>
+    <tr><th>HTTP</th><td>timeout {{ settings.http_timeout_seconds }}s · retries {{ settings.http_max_retries }} · ≥{{ settings.http_min_interval_seconds }}s between requests per host · robots.txt {{ "respected" if settings.respect_robots_txt else "ignored" }}</td></tr>
+    <tr><th>Browser automation</th><td>{{ "enabled" if settings.browser_enabled else "disabled" }}</td></tr>
+    <tr><th>Gmail</th><td>{{ "enabled" if settings.gmail_enabled else "disabled" }} · <a href="/gmail">Gmail integration →</a></td></tr>
+    <tr><th>In-process scheduler</th><td>{{ "enabled" if settings.scheduler_enabled else "disabled" }}</td></tr>
+  </table>
+</section>
+
+{% for key, value in values.items() %}
+<section class="card">
+  <h2>{{ key|replace("_", " ")|capitalize }}</h2>
+  {% if key == "search_preferences" %}
+    <p class="muted">Keywords are case-insensitive substrings. <code>remote_preferences</code>: remote, hybrid, onsite.
+    <code>experience_levels</code>: entry, mid, senior. Leave <code>locations</code> empty to accept any location.</p>
+  {% elif key == "matching" %}
+    <p class="muted">Jobs scoring at or above <code>relevance_threshold</code> are "relevant"; scores between
+    <code>review_band_low</code> and the threshold go to the review queue.</p>
+  {% elif key == "role_categories" %}
+    <p class="muted">Role categories used to classify jobs and choose a resume. Resume categories must use the same ids.</p>
+  {% endif %}
+  <form method="post" action="/settings/{{ key }}">
+    <textarea name="value" rows="{{ [value.count('\n') + 2, 24]|min }}" class="mono">{{ value }}</textarea>
+    <div class="actions">
+      <button type="submit" class="primary">Save</button>
+      <button type="submit" name="reset" value="1" data-confirm="Reset {{ key }} to defaults?">Reset to defaults</button>
+    </div>
+  </form>
+</section>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge %}
+{% block title %}Gmail{% endblock %}
+{% block content %}
+<p><a href="/settings">← Settings</a></p>
+<h1>Gmail integration (optional)</h1>
+<p class="muted">JobPilot works fully without Gmail. When connected it can create drafts in your Gmail, send
+<b>approved</b> drafts one at a time after you confirm, detect replies (to stop follow-ups), and — if you allow
+body access — suggest interviews from invitation emails.</p>
+
+<section class="card">
+  <table class="kv">
+    <tr><th>Enabled</th><td>{{ badge("yes" if st.enabled else "no", "b-ok" if st.enabled else "b-warn") }} <span class="muted small">JOBPILOT_GMAIL_ENABLED</span></td></tr>
+    <tr><th>OAuth client file</th><td>{{ "found" if st.client_secrets else "missing" }} <code>{{ st.client_secrets_path }}</code></td></tr>
+    <tr><th>Authorised</th><td>{{ "yes" if st.authorized else "no" }}{% if st.email %} as {{ st.email }}{% endif %}</td></tr>
+    <tr><th>Requested scopes</th><td class="small">{% for s in st.requested_scopes %}<code>{{ s.rsplit("/",1)[-1] }}</code> {% endfor %}</td></tr>
+    {% if st.granted_scopes %}<tr><th>Granted scopes</th><td class="small">{% for s in st.granted_scopes %}<code>{{ s.rsplit("/",1)[-1] }}</code> {% endfor %}</td></tr>{% endif %}
+  </table>
+  {% if not st.enabled or not st.authorized %}
+  <div class="notice">Setup (one time, manual): follow <code>docs/GMAIL_SETUP.md</code> — create a Desktop OAuth client in your own
+  Google Cloud project, save the JSON to the path above, set <code>JOBPILOT_GMAIL_ENABLED=true</code>, then run
+  <code>jobpilot gmail auth</code> in a terminal.</div>
+  {% else %}
+  <div class="actions">
+    <form method="post" action="/gmail/sync" class="inline"><button class="primary">Check for replies now</button></form>
+    {% if st.read_bodies %}<form method="post" action="/gmail/interviews" class="inline"><button>Scan for interview invitations</button></form>{% endif %}
+    <form method="post" action="/gmail/disconnect" class="inline" data-confirm="Revoke access and delete the stored token?"><button class="danger">Disconnect</button></form>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, field, textarea, select %}
+{% block title %}Profile{% endblock %}
+{% block content %}
+<h1>Candidate profile</h1>
+<p class="muted">Everything is optional. Only <b>confirmed</b> facts are used for eligibility, resume generation,
+email drafts and form autofill. Unverified facts (e.g. suggested from a resume) are stored but never used as truth.</p>
+
+<div class="stats">
+  <div class="stat"><div class="v">{{ completeness.score|pct }}</div><div class="l">profile completeness</div></div>
+  <div class="stat"><div class="v">{{ years if years is not none else "unknown" }}</div><div class="l">experience (years) — {{ years_src }}</div></div>
+  <div class="stat"><div class="v">{{ facts.skills|selectattr("status","equalto","confirmed")|list|length }}</div><div class="l">confirmed skills</div></div>
+  <div class="stat"><div class="v">{{ "yes" if profile.confirmed_at else "no" }}</div><div class="l">details confirmed</div></div>
+</div>
+{% set missing = completeness.checks|dictsort|selectattr(1, "equalto", false)|map(attribute=0)|list %}
+{% if missing %}<div class="notice">Missing: {{ missing|join(", ") }}</div>{% endif %}
+
+<section class="card" id="details">
+  <h2>Core details {% if profile.confirmed_at %}{{ badge("confirmed") }}{% else %}{{ badge("unverified") }}{% endif %}</h2>
+  <form method="post" action="/profile">
+    <div class="form-grid">
+      {{ field("full_name", "Full name", profile.full_name) }}
+      {{ field("first_name", "First name", profile.first_name) }}
+      {{ field("last_name", "Last name", profile.last_name) }}
+      {{ field("headline", "Headline", profile.headline) }}
+      {{ field("email", "Email", profile.email, type="email") }}
+      {{ field("phone", "Phone", profile.phone, type="tel") }}
+      {{ field("current_location", "Current location", profile.current_location) }}
+      {{ field("acceptable_locations", "Acceptable job locations (comma separated)", (profile.acceptable_locations or [])|join(", ")) }}
+      {{ field("total_experience_years", "Total experience (years)", profile.total_experience_years, type="number", step="0.1", help="Leave blank to compute from confirmed full-time roles") }}
+      {{ field("notice_period_days", "Notice period (days)", profile.notice_period_days, type="number") }}
+      {{ field("salary_expectation_min", "Expected salary min", profile.salary_expectation_min, type="number") }}
+      {{ field("salary_expectation_max", "Expected salary max", profile.salary_expectation_max, type="number") }}
+      {{ field("salary_currency", "Salary currency", profile.salary_currency, placeholder="INR, USD…") }}
+      {{ field("work_authorization", "Work authorization", profile.work_authorization, placeholder="e.g. Indian citizen") }}
+      {{ select("needs_sponsorship", "Needs visa sponsorship?", [("unknown","not set"),("false","no"),("true","yes")], "unknown" if profile.needs_sponsorship is none else (profile.needs_sponsorship|string|lower)) }}
+      {{ select("willing_to_relocate", "Willing to relocate?", [("unknown","not set"),("false","no"),("true","yes")], "unknown" if profile.willing_to_relocate is none else (profile.willing_to_relocate|string|lower)) }}
+      <label class="field"><span>Remote preferences</span>
+        <span class="checkbox">{% for opt in ["remote","hybrid","onsite"] %}<label class="checkbox"><input type="checkbox" name="remote_preferences" value="{{ opt }}" {% if opt in (profile.remote_preferences or []) %}checked{% endif %}> {{ opt }}</label>{% endfor %}</span>
+      </label>
+      {{ textarea("summary", "Professional summary", profile.summary, rows=3) }}
+    </div>
+    <div class="actions"><button class="primary">Save details</button></div>
+  </form>
+  <form method="post" action="/profile/confirm" class="actions" data-confirm="Confirm these details are accurate?">
+    <button>Confirm details are accurate</button>
+    {% if profile.confirmed_at %}<span class="muted">confirmed {{ profile.confirmed_at|dt }}</span>{% endif %}
+  </form>
+</section>
+
+{% for kind in ["skills", "employment", "education", "projects", "links"] %}
+<section class="card" id="{{ kind }}">
+  <h2>{{ labels[kind] }}</h2>
+  {% set rows = facts[kind] %}
+  {% if rows %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr>
+      {% if kind == "skills" %}<th>Skill</th><th>Category</th><th>Years</th><th>Source</th>
+      {% elif kind == "employment" %}<th>Role</th><th>Dates</th><th>Type</th><th>Source</th>
+      {% elif kind == "education" %}<th>Institution</th><th>Degree</th><th>Dates</th><th>Source</th>
+      {% elif kind == "projects" %}<th>Project</th><th>Technologies</th><th>Source</th>
+      {% else %}<th>Label</th><th>URL</th>{% endif %}
+      <th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        {% if kind == "skills" %}<td>{{ r.name }}</td><td>{{ r.category or "" }}</td><td>{{ r.years or "" }}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% elif kind == "employment" %}<td><b>{{ r.title }}</b>, {{ r.company }}</td><td class="nowrap">{{ r.start_date|d }} → {{ r.end_date|d if r.end_date else "present" }}</td><td>{{ r.employment_type or "" }}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% elif kind == "education" %}<td>{{ r.institution }}</td><td>{{ r.degree or "" }} {{ r.field_of_study or "" }}</td><td class="nowrap">{{ r.start_date|d }} → {{ r.end_date|d }}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% elif kind == "projects" %}<td>{{ r.name }}{% if r.url %} · <a href="{{ r.url }}" rel="noopener noreferrer" target="_blank">link</a>{% endif %}</td><td>{{ (r.technologies or [])|join(", ") }}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% else %}<td>{{ r.label }}</td><td><a href="{{ r.url }}" rel="noopener noreferrer" target="_blank">{{ r.url }}</a></td>{% endif %}
+        <td>{{ badge(r.status) }}</td>
+        <td class="nowrap">
+          {% if kind != "links" %}
+            {% set opts = ["confirmed","learning","unverified"] if kind == "skills" else ["confirmed","unverified"] %}
+            {% for st in opts if st != r.status %}
+              <form method="post" action="/profile/{{ kind }}/{{ r.id }}/status" class="inline"><input type="hidden" name="status" value="{{ st }}"><button class="small">{{ "confirm" if st == "confirmed" else st }}</button></form>
+            {% endfor %}
+          {% endif %}
+          <a class="button small" href="/profile/{{ kind }}/{{ r.id }}/edit">edit</a>
+          <form method="post" action="/profile/{{ kind }}/{{ r.id }}/delete" class="inline" data-confirm="Delete this entry?"><button class="small danger">delete</button></form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("None recorded.") }}{% endif %}
+  <details {% if not rows %}open{% endif %}><summary>Add {{ labels[kind]|lower }}</summary>
+    {% with fields=fields[kind], action="/profile/" ~ kind, obj=none %}{% include "_fact_form.html" %}{% endwith %}
+  </details>
+</section>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty %}
+{% block title %}{{ src.name }}{% endblock %}
+{% block content %}
+<p><a href="/sources">← Sources</a></p>
+<h1>{{ src.name }} <span class="muted small">({{ adapter.label if adapter else src.kind }})</span></h1>
+<p>{{ "Enabled" if src.enabled else "Disabled" }} · config <code>{{ src.config|tojson }}</code>
+  · {{ row.jobs_total }} job(s) seen, {{ row.jobs_active }} active · <a href="/jobs?source_id={{ src.id }}&status=">view jobs</a></p>
+{% if src.terms_note %}<p class="small muted">Terms note: {{ src.terms_note }}</p>{% endif %}
+{% if adapter %}
+<div class="actions">
+  <form method="post" action="/sources/run" class="inline"><input type="hidden" name="source_id" value="{{ src.id }}"><button class="primary">Run now</button></form>
+  <form method="post" action="/sources/run" class="inline"><input type="hidden" name="source_id" value="{{ src.id }}"><input type="hidden" name="dry_run" value="1"><button>Dry run</button></form>
+</div>
+{% endif %}
+
+<section class="card">
+  <h2>Run history</h2>
+  {% if runs %}
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Started</th><th>Trigger</th><th>Status</th><th>Fetched</th><th>New</th><th>Updated</th><th>Duplicates</th>
+      <th>Reposts</th><th>Missing</th><th>Expired</th><th>Requests</th><th>429s</th><th>HTTP errors</th><th>Details</th></tr></thead>
+    {% for r in runs %}<tr>
+      <td class="nowrap">{{ r.started_at|dt }}</td><td>{{ r.trigger }}{% if r.dry_run %} {{ badge("dry run", "b-preparing") }}{% endif %}</td>
+      <td>{{ badge(r.status) }}</td><td>{{ r.fetched }}</td><td>{{ r.new }}</td><td>{{ r.updated }}</td><td>{{ r.duplicates }}</td>
+      <td>{{ r.reposts }}</td><td>{{ r.missing }}</td><td>{{ r.expired }}</td><td>{{ r.requests }}</td><td>{{ r.rate_limited }}</td><td>{{ r.http_errors }}</td>
+      <td class="wrap small">{% if r.warnings %}<div class="notice warn">{{ r.warnings|join("; ") }}</div>{% endif %}{% if r.error %}<details><summary>errors</summary><pre>{{ r.error }}</pre></details>{% endif %}</td>
+    </tr>{% endfor %}
+  </table></div>
+  <p class="small muted">Status: success · partial (some pages failed; nothing expired) · unavailable (network, 429 or 5xx;
+  nothing changed) · failed (configuration, robots.txt, not found or malformed) · anomaly (empty or collapsed listing; nothing expired).</p>
+  {% else %}{{ empty("This source hasn't run yet.") }}{% endif %}
+</section>
+{% endblock %}

@@ -14,7 +14,7 @@ through Git or logs, (4) automation that oversteps (sending, submitting, scrapin
 | Network exposure | Binds to `127.0.0.1` by default; any other host is refused unless `JOBPILOT_ALLOW_REMOTE_BIND=true`. There is no login, so don't expose it. |
 | DNS rebinding | `TrustedHostMiddleware` only accepts `127.0.0.1`, `localhost`, `::1`. |
 | CSRF | State-changing requests with a cross-site `Origin`/`Referer`/`Sec-Fetch-Site` are rejected (403). |
-| XSS | Jinja2 autoescaping everywhere; no `|safe` on user/external data; untrusted URLs are kept only if they are absolute `http(s)` (blocks `javascript:`/`data:` links); strict CSP (`script-src 'self'`, no inline scripts), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`. |
+| XSS | Jinja2 autoescaping everywhere; no `|safe` on user/external data; untrusted URLs are kept only if they are absolute `http(s)` (blocks `javascript:`/`data:` links); strict CSP (`script-src 'self'`, no inline scripts), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: same-origin` (no referrer to external sites). |
 | Template injection | Email templates render in Jinja2's `SandboxedEnvironment`. |
 | Uploads | Extension allow-list plus magic-byte checks, 10 MB limit, content-addressed names (user filenames never become paths); downloads resolve strictly inside `data/files`. |
 | Backups | Created 0600 in a 0700 directory; exclude OAuth tokens and the browser profile. Restore validates member paths (no `..`/absolute paths/unexpected files), limits total size (2 GB) and member count, runs `PRAGMA integrity_check`, and backs up the current state first. Backups are **not encrypted**. |

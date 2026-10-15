@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, score, field, textarea %}
+{% block title %}{{ co.name }}{% endblock %}
+{% block content %}
+<p><a href="/companies">← Companies</a></p>
+<h1>{{ co.name }}</h1>
+{% if blocked %}<div class="notice bad">{{ blocked }}</div>{% endif %}
+<div class="grid-2">
+<section class="card">
+  <h2>Jobs ({{ jobs|length }})</h2>
+  {% for j in jobs %}<div class="small">{{ score(j.relevance_score) }} <a href="/jobs/{{ j.id }}">{{ j.title }}</a> {{ badge(j.status) }} <span class="muted">{{ j.location or "" }}</span></div>
+  {% else %}{{ empty("None.") }}{% endfor %}
+  <h3>Applications</h3>
+  {% for a in applications %}<div class="small"><a href="/applications/{{ a.id }}">{{ a.job.title }}</a> {{ badge(a.status) }}</div>
+  {% else %}{{ empty("None.") }}{% endfor %}
+</section>
+<section class="card">
+  <h2>Contacts ({{ contacts|length }})</h2>
+  {% for c in contacts %}<div class="small"><a href="/contacts/{{ c.id }}">{{ c.display_name }}</a> · {{ c.role_type }}
+    {% if c.email %}· {{ badge(c.email_status) }}{% endif %}{% if c.do_not_contact %} {{ badge("do not contact", "b-do_not_contact") }}{% endif %}
+    <span class="muted">({{ c.source_type }})</span></div>
+  {% else %}<p class="muted small">No contacts recorded. JobPilot doesn't look people up for you; add only publicly sourced or authorised details.</p>{% endfor %}
+  <p><a class="button small" href="/contacts">Add a contact</a></p>
+</section>
+</div>
+<section class="card">
+  <h2>Details</h2>
+  <form method="post" action="/companies/{{ co.id }}">
+    <div class="form-grid">{{ field("website", "Website", co.website, type="url") }}{{ field("careers_url", "Careers page", co.careers_url, type="url") }}</div>
+    {{ textarea("notes", "Notes", co.notes, rows=3) }}
+    <div class="actions"><button class="primary">Save</button></div>
+  </form>
+</section>
+{% endblock %}

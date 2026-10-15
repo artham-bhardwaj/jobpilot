@@ -228,9 +228,17 @@ def _save_screenshot(settings: Settings, page, name: str) -> str | None:
         return None
 
 
+def application_host(app: Application) -> str | None:
+    url = app.apply_url or app.job.apply_url or app.job.source_url
+    return (urlsplit(url or "").hostname or None) if url else None
+
+
 def run_assist(session: Session, settings: Settings, app: Application, wait_for_user: bool = True,
-               timeout_minutes: int = 45) -> BrowserRun:
-    """Launch a visible browser for one application. Caller holds the 'browser' task lock."""
+               timeout_minutes: int = 45, approved_host: str | None = None) -> BrowserRun:
+    """Launch a visible browser for one application. Caller holds the 'browser' task lock.
+
+    ``approved_host`` must equal the application page's host: you approve each site explicitly.
+    """
     run = BrowserRun(application_id=app.id, status="running")
     session.add(run)
     session.flush()
@@ -242,6 +250,17 @@ def run_assist(session: Session, settings: Settings, app: Application, wait_for_
     if not url:
         run.status, run.message = "failed", "No application URL"
         return _finish(session, run)
+    host = urlsplit(url).hostname
+    if not approved_host or approved_host.lower() != (host or "").lower():
+        run.status = "failed"
+        run.message = f"Not approved: opening {host} needs your explicit approval for this application"
+        return _finish(session, run)
+    from jobpilot.services import settings_store
+
+    allowed_sites = settings_store.get(session, "browser")["autofill_sites"]
+    if run.site and run.site not in allowed_sites:
+        run.site = None  # supported in principle, but autofill turned off for this site in Settings
+    audit.record(session, "browser.site_approved", "application", app.id, host=host)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -284,6 +303,10 @@ def run_assist(session: Session, settings: Settings, app: Application, wait_for_
                     run.message += " (profile not confirmed — no personal fields were filled)"
             run.filled_fields, run.unknown_fields = res.filled, res.unknown + [f"[you answer] {s}" for s in res.sensitive]
             run.pause_reasons = res.pause_reasons
+            if res.unknown or res.sensitive:
+                from jobpilot.services import answers as answer_svc
+
+                answer_svc.add_questions(session, app, res.unknown + res.sensitive, source="browser")
             run.screenshot_path = _save_screenshot(settings, page, f"app{app.id}-run{run.id}")
             if run.status in ("paused", "unsupported"):
                 review.open_item(session, "browser_paused", "application", app.id,

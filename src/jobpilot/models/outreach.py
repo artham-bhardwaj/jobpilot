@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from jobpilot.models.base import Base, TimestampMixin, utcnow
@@ -122,3 +122,35 @@ class EmailDraft(TimestampMixin, Base):
     job: Mapped[Job | None] = relationship()
     template: Mapped[EmailTemplate | None] = relationship()
     resume_version: Mapped[ResumeVersion | None] = relationship()
+
+
+class DraftRevision(Base):
+    """Previous text of a draft, kept on every edit."""
+
+    __tablename__ = "draft_revisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    draft_id: Mapped[int] = mapped_column(ForeignKey("email_drafts.id", ondelete="CASCADE"), index=True)
+    revision_no: Mapped[int] = mapped_column(Integer)
+    to_address: Mapped[str | None] = mapped_column(String(320))
+    subject: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    status_before: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ContactJob(Base):
+    """Association between a contact and a job (and therefore its application)."""
+
+    __tablename__ = "contact_jobs"
+    __table_args__ = (UniqueConstraint("contact_id", "job_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    relation: Mapped[str] = mapped_column(String(30), default="recruiter")  # recruiter|hiring_manager|referral|other
+    source: Mapped[str | None] = mapped_column(String(200))  # how the association was established
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    contact: Mapped[Contact] = relationship()
+    job: Mapped[Job] = relationship()

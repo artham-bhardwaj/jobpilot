@@ -63,6 +63,45 @@ denominator; below that you see the raw counts. "Missing" means the data isn't k
 </section>
 
 <section class="card">
+  <h2>Collection by source</h2>
+  {% if s.collection %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Source</th><th>Runs</th><th>Fetched</th><th>New</th><th>Duplicates</th><th>Duplicate share</th><th>Expired</th><th>Problem runs</th><th>429s</th></tr></thead>
+    {% for r in s.collection %}<tr><td><a href="/sources">{{ r.source }}</a></td><td>{{ r.runs }}</td><td>{{ r.fetched }}</td><td>{{ r.new }}</td>
+      <td>{{ r.duplicates }}</td><td>{{ rate(r.duplicate_share) }}</td><td>{{ r.expired }}</td><td>{{ r.problem_runs }}</td><td>{{ r.rate_limited }}</td></tr>{% endfor %}
+  </table></div>
+  <p class="small muted">Duplicates = postings first seen via another source (kept as extra provenance). Dry runs are excluded.</p>
+  {% else %}{{ empty("No sources yet.") }}{% endif %}
+</section>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Awaiting review</h2>
+  {% for label, n in s.review.items() %}<div class="small"><a href="/review">{{ label }}</a>: {{ n }}</div>{% else %}{{ empty("Nothing waiting.") }}{% endfor %}
+</section>
+<section class="card">
+  <h2>Resume selection by role category</h2>
+  <p class="small muted">For {{ s.resume_selection.jobs_considered }} relevant active job(s) without hard conflicts.</p>
+  {% if s.resume_selection.by_category %}
+  <table class="table compact small"><thead><tr><th>Category</th><th>Jobs</th><th>Matching variant</th><th>Fallback</th><th>Unsuitable</th><th>No resume</th></tr></thead>
+    {% for cat, r in s.resume_selection.by_category.items() %}<tr><td>{{ cat }}</td><td>{{ r.jobs }}</td><td>{{ r.exact }}</td><td>{{ r.fallback }}</td><td>{{ r.unsuitable }}</td><td>{{ r.missing }}</td></tr>{% endfor %}
+  </table>{% else %}{{ empty("No relevant jobs yet.") }}{% endif %}
+  {% if s.resume_selection.applications_by_resume_category %}<p class="small">Applications by resume category:
+    {% for k, v in s.resume_selection.applications_by_resume_category.items() %}<span class="tag">{{ k }} · {{ v }}</span>{% endfor %}</p>{% endif %}
+</section>
+</div>
+
+<section class="card">
+  <h2>Common skill gaps</h2>
+  {% if s.skill_gaps.top %}
+  <p class="small muted">Across {{ s.skill_gaps.jobs_analyzed }} relevant/shortlisted/applied job(s){% if s.skill_gaps.jobs_analyzed < 5 %} — too few to generalise{% endif %}.</p>
+  <table class="table compact small"><thead><tr><th>Skill</th><th>Your status</th><th>Required in</th><th>Preferred in</th><th>Share of jobs</th></tr></thead>
+    {% for g in s.skill_gaps.top %}<tr><td>{{ g.skill }}</td><td>{{ g.status }}</td><td>{{ g.required_in }}</td><td>{{ g.preferred_in }}</td><td>{{ g.share|pct }}</td></tr>{% endfor %}</table>
+  <p class="small"><a href="/skills">Skill-gap details and learning backlog →</a></p>
+  {% else %}{{ empty("No gaps found (or no relevant jobs yet).") }}{% endif %}
+</section>
+
+<section class="card">
   <h2>Resume performance</h2>
   {% if s.resumes %}
   <table class="table">

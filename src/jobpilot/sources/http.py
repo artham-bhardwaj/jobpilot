@@ -17,6 +17,7 @@ import socket
 import threading
 import time
 import urllib.robotparser
+from collections import Counter
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -65,6 +66,29 @@ def _is_public_host(host: str) -> bool:
     return all(_ip_allowed(ipaddress.ip_address(info[4][0].split("%")[0])) for info in infos)
 
 
+def _status_class(code: int) -> str:
+    if code == 429:
+        return "rate_limited"
+    if code >= 500:
+        return "server_error"
+    if code >= 400:
+        return "client_error"
+    if code >= 300:
+        return "redirect"
+    return "ok"
+
+
+def is_temporary(exc: BaseException) -> bool:
+    """True for failures that say nothing about whether jobs still exist (network, 429, 5xx)."""
+    if isinstance(exc, requests.RequestException):
+        return True
+    if isinstance(exc, FetchError):
+        if exc.status is not None:
+            return exc.status == 429 or exc.status >= 500
+        return str(exc).startswith("Failed to fetch")  # retries exhausted on network errors
+    return False
+
+
 class PoliteHttp:
     def __init__(self, settings: Settings, session: requests.Session | None = None):
         self.settings = settings
@@ -74,6 +98,8 @@ class PoliteHttp:
         self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
         self._lock = threading.Lock()
         self.request_count = 0
+        # Response classes seen: ok, redirect, rate_limited (429), client_error, server_error, network_error.
+        self.stats: Counter[str] = Counter()
 
     # ---- safety checks --------------------------------------------------------------
 
@@ -118,9 +144,14 @@ class PoliteHttp:
             if check_robots and not self._robots_allows(url):
                 raise BlockedByRobots(f"robots.txt disallows fetching {url}")
             self._throttle(urlsplit(url).netloc)
-            r = self.session.get(url, params=params if hop == 0 else None, timeout=self.settings.http_timeout_seconds,
-                                 headers={"Accept": accept}, allow_redirects=False, stream=True)
+            try:
+                r = self.session.get(url, params=params if hop == 0 else None, timeout=self.settings.http_timeout_seconds,
+                                     headers={"Accept": accept}, allow_redirects=False, stream=True)
+            except requests.RequestException:
+                self.stats["network_error"] += 1
+                raise
             self.request_count += 1
+            self.stats[_status_class(r.status_code)] += 1
             if r.status_code in REDIRECT_STATUSES and r.headers.get("Location"):
                 nxt = urljoin(r.url or url, r.headers["Location"])
                 r.close()

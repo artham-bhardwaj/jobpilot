@@ -1,18 +1,18 @@
-"""Job classification, relevance scoring and eligibility assessment.
+"""Job classification, relevance, eligibility and data confidence.
 
-Two independent results are produced for each job:
+Three independent results are produced for each job, all from deterministic rules:
 
-* **Relevance (0-100)** — how well the job matches what the candidate *wants*
-  (role category, skills overlap, level, location/remote, keywords, salary).
-* **Eligibility** — whether the candidate meets the *stated* requirements,
-  using **confirmed** profile facts only:
-    - ``eligible``         all key checks pass and nothing relevant is unknown
-    - ``likely_eligible``  key checks pass; some secondary information unknown
-    - ``unknown``          a key requirement or candidate fact is missing
-    - ``ineligible``       at least one stated requirement is clearly not met
-  Missing information never produces ``eligible``.
-
-Every component records a human-readable explanation.
+* **Relevance (0-100)**: how well the job fits what you *want*. Seven weighted components (weights
+  configurable, normalised to 100): required skills, preferred skills, role alignment, experience level,
+  education, location/work mode, other preferences (keywords, salary). Each has an explanation and evidence.
+* **Eligibility**: whether you meet the *stated* requirements, using **confirmed** profile facts only.
+    - ``eligible`` / ``likely_eligible`` (stated requirements met; some secondary information unknown)
+    - ``unknown`` (a key requirement or your corresponding fact is missing; never treated as satisfied)
+    - ``ineligible`` (a stated requirement is clearly not met)
+  Failed checks are marked **hard** (configurable: large experience gap, sponsorship, location, excluded
+  title keywords) or soft (e.g. skill gaps you could close). A hard conflict makes the recommendation
+  "not suitable" however high the relevance score.
+* **Data confidence** (high / medium / low): how much the posting actually told us.
 """
 
 from __future__ import annotations
@@ -99,14 +99,16 @@ def _location_check(job: Job, parsed: job_parser.ParsedRequirements, profile) ->
         return {"name": "location", "status": "unknown",
                 "explanation": f"'{job.location}' is outside your listed locations; relocation preference not set"}
     return {"name": "location", "status": "fail",
-            "explanation": f"'{job.location}' is outside your listed locations and you prefer not to relocate"}
+            "explanation": f"'{job.location}' is outside your listed locations and you prefer not to relocate",
+            "rule": "location_conflict"}
 
 
 def _work_auth_check(parsed: job_parser.ParsedRequirements, profile) -> dict:
     if parsed.sponsorship == "not_available":
         if profile.needs_sponsorship is True:
             return {"name": "work authorization", "status": "fail",
-                    "explanation": "posting says no visa sponsorship; your profile says you need sponsorship"}
+                    "explanation": "posting says no visa sponsorship; your profile says you need sponsorship",
+                    "rule": "sponsorship_conflict"}
         if profile.needs_sponsorship is None:
             return {"name": "work authorization", "status": "unknown",
                     "explanation": "posting says no visa sponsorship; your sponsorship need is not set"}
@@ -127,6 +129,10 @@ def _work_auth_check(parsed: job_parser.ParsedRequirements, profile) -> dict:
 def _education_check(session: Session, parsed: job_parser.ParsedRequirements) -> dict | None:
     if not parsed.degree_required:
         return None
+    if parsed.degree_equivalent_experience_ok:
+        return {"name": "education", "status": "pass" if session.scalar(
+            select(Education.id).where(Education.status == "confirmed").limit(1)) else "warn",
+                "explanation": f"posting asks for '{parsed.degree_required}' and accepts equivalent experience"}
     confirmed = list(session.scalars(select(Education).where(Education.status == "confirmed")))
     if not confirmed:
         return {"name": "education", "status": "unknown",
@@ -137,168 +143,251 @@ def _education_check(session: Session, parsed: job_parser.ParsedRequirements) ->
                            "— verify it satisfies the requirement"}
 
 
-def evaluate(session: Session, job: Job) -> dict[str, Any]:
+COMPONENT_LABELS = {
+    "required_skills": "required skills", "preferred_skills": "preferred skills", "role_alignment": "role alignment",
+    "experience_level": "experience level", "education": "education", "location": "location / work mode",
+    "preferences": "other preferences",
+}
+RECOMMENDATIONS = {
+    "not_suitable": "Not suitable — hard conflict",
+    "stretch": "Stretch — requirements not met",
+    "strong": "Strong match",
+    "relevant": "Relevant",
+    "borderline": "Borderline",
+    "low": "Low relevance",
+}
+
+
+def _structured_from_job(job: Job) -> dict[str, Any]:
+    keys = set((job.raw or {}).get("_structured") or [])
+    values = {"remote_type": job.remote_type, "employment_type": job.employment_type, "salary_min": job.salary_min,
+              "salary_max": job.salary_max, "salary_currency": job.salary_currency,
+              "valid_through": job.valid_through.isoformat() if job.valid_through else None, "location": job.location}
+    return {k: v for k, v in values.items() if k in keys and v not in (None, "")}
+
+
+def _candidate_skill_note(name: str, info: dict | None) -> str:
+    if not info:
+        return "not in your profile"
+    if info["status"] == "unverified":
+        return "in your profile but UNVERIFIED (confirm it if accurate)"
+    if info["status"] == "learning":
+        return "you are learning it (not claimed)"
+    where = []
+    if info["work"]:
+        where.append("work: " + "; ".join(info["work"][:2]))
+    if info["projects"]:
+        where.append("personal projects: " + "; ".join(info["projects"][:2]))
+    return "confirmed" + (f" ({' | '.join(where)})" if where else " (no linked role or project)")
+
+
+def evaluate(session: Session, job: Job, weights: dict[str, float] | None = None) -> dict[str, Any]:
+    """Score one job. ``weights`` overrides the saved weights (used for previews; nothing is stored)."""
     prefs = settings_store.get(session, "search_preferences")
     mcfg = settings_store.get(session, "matching")
+    hard_cfg = settings_store.get(session, "hard_rules")
+    rules = settings_store.get(session, "review_rules")
     categories = settings_store.get(session, "role_categories")
+    from jobpilot.services import skills_taxonomy
+
+    skills_taxonomy.configure_from_settings(session)
+    W = {k: float(v) for k, v in (weights or settings_store.get(session, "matching_weights")).items()}
+    scale = 100.0 / (sum(W.values()) or 1.0)
     profile = profile_svc.get_profile(session)
-    have = profile_svc.confirmed_skills(session)
-    learning = profile_svc.learning_skills(session)
-    parsed = job_parser.parse(job.title, job.description_text, job.location)
-
+    cand = profile_svc.skill_profile(session)
+    have = {k for k, v in cand.items() if v["status"] == "confirmed"}
+    parsed = job_parser.parse(job.title, job.description_text, job.location, structured=_structured_from_job(job))
     category = classify(job.title, job.description_text, categories)
-    missing_info: list[str] = []
-    components: list[dict] = []
     title_norm = f" {normalize(job.title)} "
+    missing_job: list[str] = []
+    missing_profile: list[str] = []
+    components: list[dict] = []
 
-    # --- Exclusions -------------------------------------------------------
+    def component(key: str, fraction: float, explanation: str, evidence: list[str] | None = None) -> None:
+        mx = W.get(key, 0) * scale
+        components.append({"key": key, "name": COMPONENT_LABELS[key], "points": round(mx * max(0.0, min(1.0, fraction)), 1),
+                           "max": round(mx, 1), "fraction": round(fraction, 2), "explanation": explanation,
+                           "evidence": evidence or []})
+
     excluded = [k for k in prefs.get("exclude_keywords", []) if k.strip() and contains_term(title_norm, k)]
 
-    # --- 1. Role fit (35) ---------------------------------------------------
+    # --- Role alignment ---------------------------------------------------------------------
     if category["id"]:
         title_based = any(r.startswith("title") for r in category["reasons"])
-        # Title match: 21-35 points by confidence. Description-only match: at most 12.
-        pts = 35 * (0.6 + 0.4 * category["confidence"]) if title_based else 12 * min(1.0, 2 * category["confidence"])
-        components.append({"name": "role fit", "points": round(pts, 1), "max": 35,
-                           "explanation": f"classified as {category['label']}: " + "; ".join(category["reasons"])})
+        frac = (0.6 + 0.4 * category["confidence"]) if title_based else 0.35 * min(1.0, 2 * category["confidence"])
+        component("role_alignment", frac, f"classified as {category['label']}", category["reasons"])
     else:
-        components.append({"name": "role fit", "points": 0, "max": 35,
-                           "explanation": "title/description match none of your target role categories"})
+        component("role_alignment", 0, "title/description match none of your target role categories")
 
-    # --- 2. Skills (35) -----------------------------------------------------
+    # --- Skills ----------------------------------------------------------------------------
     mand, pref = parsed.mandatory_skills, parsed.preferred_skills
-    mand_reqs = requirement_groups(mand, parsed.alternatives)
-    have_m = [s for s in mand if s in have]
-    have_p = [s for s in pref if s in have]
-    met_reqs = [g for g in mand_reqs if any(s in have for s in g)]
-    miss_m = [" or ".join(g) for g in mand_reqs if not any(s in have for s in g)]
-    miss_p = [s for s in pref if s not in have]
-    if not mand and not pref:
-        components.append({"name": "skills", "points": 0, "max": 35,
-                           "explanation": "no recognisable skills found in the posting — review manually"})
-        missing_info.append("required skills (none recognised in posting)")
+    groups = requirement_groups(mand, parsed.alternatives)
+    met = [g for g in groups if any(x in have for x in g)]
+    missing_groups = [g for g in groups if not any(x in have for x in g)]
+    unverified_hits = sorted({x for g in missing_groups for x in g if cand.get(x, {}).get("status") == "unverified"})
+    req_evidence = []
+    for g in groups:
+        label = " or ".join(g)
+        ev = parsed.skill_evidence.get(g[0], {})
+        src = f"{ev.get('where', '?')}" + (f": “{ev['snippet'][:80]}”" if ev.get("snippet") else "")
+        mine = next((x for x in g if x in have), None)
+        note = _candidate_skill_note(mine, cand.get(mine)) if mine else "; ".join(
+            f"{x}: {_candidate_skill_note(x, cand.get(x))}" for x in g)
+        req_evidence.append(f"{label} — required ({ev.get('basis', '?')}, {src}) → {note}")
+    if not groups:
+        component("required_skills", 0, "no required skills recognised in the posting — no credit (data confidence is "
+                                        "lowered; review manually if the role fits)")
+        missing_job.append("required skills (none recognised in the posting)")
     elif not have:
-        components.append({"name": "skills", "points": 0, "max": 35,
-                           "explanation": "your profile has no confirmed skills yet"})
-        missing_info.append("confirmed skills in your profile")
+        component("required_skills", 0, "your profile has no confirmed skills yet", req_evidence)
+        missing_profile.append("confirmed skills")
     else:
-        if mand and pref:
-            pts = 27 * len(met_reqs) / len(mand_reqs) + 8 * len(have_p) / len(pref)
-        elif mand:
-            pts = 35 * len(met_reqs) / len(mand_reqs)
-        else:
-            pts = 35 * len(have_p) / len(pref)
-        bits = []
-        if mand:
-            bits.append(f"{len(met_reqs)}/{len(mand_reqs)} required")
-        if pref:
-            bits.append(f"{len(have_p)}/{len(pref)} preferred")
-        components.append({"name": "skills", "points": round(pts, 1), "max": 35,
-                           "explanation": f"you have {' and '.join(bits)} skills"
-                           + (f"; missing: {', '.join(miss_m)}" if miss_m else "")})
+        component("required_skills", len(met) / len(groups),
+                  f"you have {len(met)}/{len(groups)} required" + (f"; missing: {', '.join(' or '.join(g) for g in missing_groups)}"
+                                                                    if missing_groups else ""), req_evidence)
+    have_p = [x for x in pref if x in have]
+    if not pref:
+        component("preferred_skills", 1.0 if groups else 0.5,
+                  "no preferred skills listed" + ("" if groups else " (nor required ones — partial credit)"))
+    else:
+        component("preferred_skills", len(have_p) / len(pref) if have else 0,
+                  f"you have {len(have_p)}/{len(pref)} preferred",
+                  [f"{x} — preferred → {_candidate_skill_note(x, cand.get(x))}" for x in pref])
 
-    # --- 3. Preferences (30) -------------------------------------------------
+    # --- Experience level --------------------------------------------------------------------
+    cand_years, years_src = profile_svc.experience_years(session)
     levels = prefs.get("experience_levels") or []
     lvl = job.experience_level or parsed.experience_level
+    parts, ev = [], [f"seniority: {lvl or 'not stated'} ({parsed.evidence['seniority']['basis']})"]
     if lvl is None:
-        pts, why = 5, "experience level not stated (partial credit)"
-        missing_info.append("experience level")
-    elif not levels or lvl in levels:
-        pts, why = 10, f"level '{lvl}' is in your preferences"
+        parts.append(0.5)
+        missing_job.append("seniority / experience level")
     else:
-        pts, why = 0, f"level '{lvl}' is outside your preferences ({', '.join(levels)})"
-    components.append({"name": "level", "points": pts, "max": 10, "explanation": why})
+        parts.append(1.0 if (not levels or lvl in levels) else 0.0)
+    req_min = parsed.experience_min_years
+    if req_min is not None and cand_years is not None:
+        gap = req_min - cand_years
+        parts.append(1.0 if gap <= 0 else (0.5 if gap <= hard_cfg["experience_gap_years"] else 0.0))
+        ev.append(f"requires {req_min:g}+ years (“{parsed.experience_evidence}”); you have {cand_years:g} ({years_src})")
+    elif req_min is not None:
+        ev.append(f"requires {req_min:g}+ years; your experience is unknown ({years_src})")
+    component("experience_level", sum(parts) / len(parts),
+              f"level '{lvl or 'unknown'}'" + (" is in your preferences" if lvl and (not levels or lvl in levels) else
+                                               " is outside your preferences" if lvl else " (partial credit)"), ev)
 
+    # --- Education ---------------------------------------------------------------------------
+    confirmed_edu = list(session.scalars(select(Education).where(Education.status == "confirmed")))
+    deg_ev = parsed.evidence.get("degree", {})
+    if not parsed.degree_required:
+        component("education", 1.0, "no degree requirement stated" if deg_ev.get("basis") == "unknown"
+                  else f"degree {deg_ev.get('value')}", [deg_ev["snippet"]] if deg_ev.get("snippet") else [])
+    elif confirmed_edu:
+        component("education", 1.0, f"posting asks for '{parsed.degree_required}'; you have confirmed education — "
+                                    "verify the field/level matches", [e.degree or e.institution for e in confirmed_edu])
+    elif parsed.degree_equivalent_experience_ok:
+        component("education", 0.5, "degree or equivalent experience accepted; no confirmed education in your profile")
+        missing_profile.append("education (confirmed)")
+    else:
+        component("education", 0, f"posting asks for '{parsed.degree_required}'; no confirmed education in your profile")
+        missing_profile.append("education (confirmed)")
+
+    # --- Location / work mode ------------------------------------------------------------------
     remote_prefs = prefs.get("remote_preferences") or []
     pref_locs = [normalize(x) for x in prefs.get("locations") or [] if x]
     jl = normalize(job.location)
+    wm = parsed.evidence.get("work_mode", {})
+    loc_ev = [f"work mode: {job.remote_type} ({wm.get('basis', 'unknown')})", f"location: {job.location or 'not stated'}"]
     if job.remote_type == "unknown":
-        pts, why = 5, "remote/hybrid/onsite not stated (partial credit)"
-        missing_info.append("work arrangement (remote/hybrid/onsite)")
+        frac, why = 0.5, "work mode not stated (partial credit)"
+        missing_job.append("work arrangement (remote/hybrid/onsite)")
     elif remote_prefs and job.remote_type not in remote_prefs:
-        pts, why = 0, f"{job.remote_type} is not in your preferences"
+        frac, why = 0.0, f"{job.remote_type} is not in your preferences"
     elif job.remote_type == "remote" or not pref_locs:
-        pts, why = 10, f"{job.remote_type} matches your preferences"
+        frac, why = 1.0, f"{job.remote_type} matches your preferences"
     elif jl and any(p in jl for p in pref_locs):
-        pts, why = 10, f"{job.remote_type} in a preferred location ({job.location})"
+        frac, why = 1.0, f"{job.remote_type} in a preferred location ({job.location})"
     elif not jl:
-        pts, why = 5, "location not stated (partial credit)"
-        missing_info.append("job location")
+        frac, why = 0.5, "location not stated (partial credit)"
+        missing_job.append("job location")
     else:
-        pts, why = 2, f"{job.location} is not one of your preferred locations"
-    components.append({"name": "location", "points": pts, "max": 10, "explanation": why})
+        frac, why = 0.2, f"{job.location} is not one of your preferred locations"
+    component("location", frac, why, loc_ev)
 
+    # --- Other preferences ---------------------------------------------------------------------
     inc = [k for k in prefs.get("include_keywords", []) if k.strip()]
     text_norm = normalize(f"{job.title} {job.description_text or ''}")
-    if not inc:
-        pts, why = 5, "no include-keywords configured"
-    else:
-        hits = [k for k in inc if contains_term(text_norm, k)]
-        pts = 5 if hits else 0
-        why = f"mentions {', '.join(hits)}" if hits else "none of your include-keywords appear"
-    components.append({"name": "keywords", "points": pts, "max": 5, "explanation": why})
-
+    hits = [k for k in inc if contains_term(text_norm, k)]
+    kw = 1.0 if not inc else (1.0 if hits else 0.0)
+    kw_why = "no include-keywords configured" if not inc else (f"mentions {', '.join(hits)}" if hits else "none of your include-keywords appear")
     min_sal = prefs.get("min_salary")
     sal_max = job.salary_max or job.salary_min
     if not min_sal:
-        pts, why = 5, "no minimum salary configured"
+        sal, sal_why = 1.0, "no minimum salary configured"
     elif sal_max is None:
-        pts, why = 2.5, "salary not stated (partial credit)"
-        missing_info.append("salary")
+        sal, sal_why = 0.5, "salary not stated (partial credit)"
+        missing_job.append("salary")
     elif prefs.get("salary_currency") and job.salary_currency and prefs["salary_currency"] != job.salary_currency:
-        pts, why = 2.5, f"salary in {job.salary_currency}, preference in {prefs['salary_currency']} — not compared"
+        sal, sal_why = 0.5, f"salary in {job.salary_currency}, preference in {prefs['salary_currency']} — not compared"
     elif sal_max >= min_sal:
-        pts, why = 5, f"salary up to {sal_max:,} meets your minimum {min_sal:,}"
+        sal, sal_why = 1.0, f"salary up to {sal_max:,} meets your minimum {min_sal:,}"
     else:
-        pts, why = 0, f"salary up to {sal_max:,} is below your minimum {min_sal:,}"
-    components.append({"name": "salary", "points": pts, "max": 5, "explanation": why})
+        sal, sal_why = 0.0, f"salary up to {sal_max:,} is below your minimum {min_sal:,}"
+    component("preferences", 0.6 * kw + 0.4 * sal, f"{kw_why}; {sal_why}")
 
     score = round(sum(c["points"] for c in components), 1)
     if excluded:
         score = 0.0
 
-    # --- Eligibility --------------------------------------------------------
+    # --- Eligibility ---------------------------------------------------------------------------
     checks: list[dict] = []
-    cand_years, years_src = profile_svc.experience_years(session)
-    if parsed.experience_min_years is None:
+    gap_limit = hard_cfg["experience_gap_years"]
+    if req_min is None:
         checks.append({"name": "experience", "status": "unknown", "key": True,
                        "explanation": "years of experience required are not stated"})
     elif cand_years is None:
         checks.append({"name": "experience", "status": "unknown", "key": True,
-                       "explanation": f"requires {parsed.experience_min_years:g}+ years; your experience is unknown ({years_src})"})
-        missing_info.append("your total experience (profile)")
-    elif cand_years >= parsed.experience_min_years:
+                       "explanation": f"requires {req_min:g}+ years; your work experience is unknown ({years_src})"})
+        missing_profile.append("total work experience")
+    elif cand_years >= req_min:
         checks.append({"name": "experience", "status": "pass", "key": True,
-                       "explanation": f"requires {parsed.experience_min_years:g}+ years; you have {cand_years:g} ({years_src})"})
-    elif cand_years >= parsed.experience_min_years - 0.5:
+                       "explanation": f"requires {req_min:g}+ years; you have {cand_years:g} years of work experience "
+                                      f"({years_src}; personal projects not counted)"})
+    elif req_min - cand_years <= 0.5:
         checks.append({"name": "experience", "status": "warn", "key": True,
-                       "explanation": f"requires {parsed.experience_min_years:g}+ years; you have {cand_years:g} — slightly below"})
+                       "explanation": f"requires {req_min:g}+ years; you have {cand_years:g} — slightly below"})
     else:
-        checks.append({"name": "experience", "status": "fail", "key": True,
-                       "explanation": f"requires {parsed.experience_min_years:g}+ years; you have {cand_years:g} ({years_src})"})
-
-    if not mand:
+        gap = req_min - cand_years
+        checks.append({"name": "experience", "status": "fail", "key": True, "rule": "experience_gap_years" if gap > gap_limit else None,
+                       "explanation": f"requires {req_min:g}+ years; you have {cand_years:g} ({years_src}; personal "
+                                      f"projects not counted) — {gap:g} year(s) short"})
+    if not groups:
         checks.append({"name": "required skills", "status": "unknown", "key": True,
                        "explanation": "no required skills recognised in the posting"})
     elif not have:
         checks.append({"name": "required skills", "status": "unknown", "key": True,
                        "explanation": "no confirmed skills in your profile to compare"})
     else:
-        ratio = len(miss_m) / len(mand_reqs)
+        ratio = len(missing_groups) / len(groups)
+        names = ", ".join(" or ".join(g) for g in missing_groups)
+        extra = f" ({', '.join(unverified_hits)} listed in your profile but unverified)" if unverified_hits else ""
         if ratio == 0:
-            st, why = "pass", "you have all recognised required skills"
+            st, why = "pass", "you have all recognised required skills (confirmed)"
         elif ratio <= mcfg["max_missing_mandatory_ratio"]:
-            st, why = "warn", f"missing {len(miss_m)}/{len(mand_reqs)} required: {', '.join(miss_m)}"
+            st, why = "warn", f"missing {len(missing_groups)}/{len(groups)} required: {names}{extra}"
         else:
-            st, why = "fail", f"missing {len(miss_m)}/{len(mand_reqs)} required: {', '.join(miss_m)}"
+            st, why = "fail", f"missing {len(missing_groups)}/{len(groups)} required: {names}{extra}"
         checks.append({"name": "required skills", "status": st, "key": True, "explanation": why})
-
     checks.append({**_location_check(job, parsed, profile), "key": False})
     checks.append({**_work_auth_check(parsed, profile), "key": False})
     edu = _education_check(session, parsed)
     if edu:
         checks.append({**edu, "key": False})
-
+    for c in checks:
+        rule = c.pop("rule", None)
+        c["hard"] = bool(c["status"] == "fail" and rule and hard_cfg.get(rule))
+    if excluded and hard_cfg["excluded_title_keywords"]:
+        checks.append({"name": "title keywords", "status": "fail", "key": False, "hard": True,
+                       "explanation": f"title contains excluded keyword(s): {', '.join(excluded)}"})
     statuses = [c["status"] for c in checks]
     key_statuses = [c["status"] for c in checks if c["key"]]
     if "fail" in statuses:
@@ -309,35 +398,88 @@ def evaluate(session: Session, job: Job) -> dict[str, Any]:
         eligibility = "likely_eligible"
     else:
         eligibility = "eligible"
+    hard_conflicts = [c["explanation"] for c in checks if c["hard"]]
+    if profile.acceptable_locations is None and not profile.current_location:
+        missing_profile.append("your locations")
+    if profile.needs_sponsorship is None and parsed.sponsorship != "not_stated":
+        missing_profile.append("whether you need visa sponsorship")
 
+    # --- Data confidence -------------------------------------------------------------------------
+    raw = job.raw or {}
+    signals = [
+        ("description is substantial (≥ 400 characters)", len(job.description_text or "") >= 400),
+        ("requirements section found", parsed.requirements_section_found),
+        ("at least 2 required skills recognised", len(mand) >= 2),
+        ("experience requirement stated", req_min is not None),
+        ("location or work mode stated", bool(job.location) or job.remote_type != "unknown"),
+        ("structured data from the source", bool(raw.get("_structured"))),
+        ("not a partial page extraction", not raw.get("partial")),
+    ]
+    n_ok = sum(ok for _, ok in signals)
+    confidence = "high" if n_ok >= 6 else ("medium" if n_ok >= 4 else "low")
+
+    # --- Recommendation and review rules -----------------------------------------------------------
+    threshold, strong, band_low = mcfg["relevance_threshold"], mcfg.get("strong_threshold", 75), mcfg["review_band_low"]
+    if hard_conflicts:
+        rec = "not_suitable"
+    elif eligibility == "ineligible":
+        rec = "stretch"
+    elif score >= strong and eligibility in ("eligible", "likely_eligible"):
+        rec = "strong"
+    elif score >= threshold:
+        rec = "relevant"
+    elif score >= band_low:
+        rec = "borderline"
+    else:
+        rec = "low"
     review_reasons: list[str] = []
-    threshold, band_low = mcfg["relevance_threshold"], mcfg["review_band_low"]
-    if not excluded and job.status == "active":
-        if score >= threshold and eligibility == "unknown":
+    if job.status == "active" and rec != "not_suitable":
+        if rules.get("strong_match") and rec == "strong":
+            review_reasons.append("strong match — decide whether to apply")
+        if rules.get("relevant_but_eligibility_unknown") and score >= threshold and eligibility == "unknown":
             review_reasons.append("relevant, but eligibility could not be determined")
-        if band_low <= score < threshold:
+        if rules.get("borderline_relevance") and band_low <= score < threshold:
             review_reasons.append(f"borderline relevance ({score:g}, threshold {threshold})")
-        if (job.raw or {}).get("partial"):
+        if rules.get("partial_extraction") and raw.get("partial"):
             review_reasons.append("job details were extracted without structured data")
-        if score >= threshold and eligibility == "likely_eligible" and any(c["status"] == "warn" for c in checks):
+        if rules.get("eligibility_warnings") and score >= threshold and eligibility == "likely_eligible" \
+                and any(c["status"] == "warn" for c in checks):
             review_reasons.append("relevant, with eligibility warnings to check")
+        if rules.get("low_confidence_relevant") and score >= threshold and confidence == "low":
+            review_reasons.append("relevant, but the posting gave little information (low data confidence)")
 
+    skills_block = {
+        "mandatory": mand, "preferred": pref, "mentioned": parsed.mentioned_skills,
+        "have": sorted({x for x in mand + pref if x in have}),
+        "unverified": sorted({x for x in mand + pref if cand.get(x, {}).get("status") == "unverified"}),
+        "learning": sorted({x for x in mand + pref if cand.get(x, {}).get("status") == "learning"}),
+        "missing_mandatory": [" or ".join(g) for g in missing_groups],
+        "missing_preferred": [x for x in pref if x not in have],
+        "alternatives": parsed.alternatives, "all": parsed.all_skills,
+        "job_evidence": parsed.skill_evidence,
+        "candidate": {x: _candidate_skill_note(x, cand.get(x)) for x in mand + pref},
+    }
     return {
         "category": category,
-        "relevance": {"score": score, "threshold": threshold, "relevant": score >= threshold and not excluded,
-                      "components": components, "excluded_by": excluded or None},
-        "eligibility": {"status": eligibility, "checks": checks},
-        "skills": {"mandatory": mand, "preferred": pref, "have": sorted(set(have_m + have_p)),
-                   "missing_mandatory": miss_m, "missing_preferred": miss_p,
-                   "learning": sorted(s for s in mand + pref if s in learning and s not in have),
-                   "all": parsed.all_skills, "alternatives": parsed.alternatives},
-        "requirements": {"experience_min_years": parsed.experience_min_years,
-                         "experience_max_years": parsed.experience_max_years,
-                         "experience_evidence": parsed.experience_evidence,
-                         "sponsorship": parsed.sponsorship, "degree_required": parsed.degree_required,
+        "relevance": {"score": score, "threshold": threshold, "strong_threshold": strong,
+                      "relevant": score >= threshold and not excluded and not hard_conflicts,
+                      "components": components, "excluded_by": excluded or None,
+                      "weights": {k: round(v * scale, 1) for k, v in W.items()}},
+        "eligibility": {"status": eligibility, "checks": checks, "hard_conflicts": hard_conflicts},
+        "confidence": {"level": confidence, "signals": [{"name": n, "ok": ok} for n, ok in signals]},
+        "recommendation": {"key": rec, "label": RECOMMENDATIONS[rec]},
+        "skills": skills_block,
+        "requirements": {"experience_min_years": req_min, "experience_max_years": parsed.experience_max_years,
+                         "experience_evidence": parsed.experience_evidence, "sponsorship": parsed.sponsorship,
+                         "degree_required": parsed.degree_required,
+                         "degree_equivalent_ok": parsed.degree_equivalent_experience_ok,
+                         "employment_type": parsed.employment_type, "deadline": parsed.application_deadline,
                          "location_constraints": parsed.location_constraints,
-                         "relocation_offered": parsed.relocation_offered, "emails": parsed.emails},
-        "missing_info": sorted(set(missing_info)),
+                         "relocation_offered": parsed.relocation_offered, "emails": parsed.emails,
+                         "evidence": parsed.evidence},
+        "missing_info": sorted(set(missing_job + missing_profile)),
+        "missing_job_info": sorted(set(missing_job)),
+        "missing_profile_info": sorted(set(missing_profile)),
         "needs_review": bool(review_reasons),
         "review_reasons": review_reasons,
     }
@@ -349,6 +491,8 @@ def match_job(session: Session, job: Job) -> dict[str, Any]:
     job.category_confidence = result["category"]["confidence"]
     job.relevance_score = result["relevance"]["score"]
     job.eligibility = result["eligibility"]["status"]
+    job.confidence = result["confidence"]["level"]
+    job.hard_conflict = bool(result["eligibility"]["hard_conflicts"])
     job.match_details = result
     job.matched_at = utcnow()
     return result

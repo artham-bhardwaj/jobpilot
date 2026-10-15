@@ -125,6 +125,9 @@ def _next_version_no(session: Session, resume_id: int) -> int:
 
 def import_version(session: Session, settings: Settings, resume: Resume, filename: str, data: bytes,
                    note: str | None = None, change_summary: str | None = None) -> ResumeVersion:
+    from jobpilot.services import skills_taxonomy
+
+    skills_taxonomy.configure_from_settings(session)
     stored = storage.store(settings, "resumes", filename, data, allowed=RESUME_EXTS)
     dup = session.scalar(select(ResumeVersion).where(ResumeVersion.resume_id == resume.id,
                                                      ResumeVersion.sha256 == stored.sha256))
@@ -280,49 +283,90 @@ def generate_version(session: Session, settings: Settings, resume: Resume, selec
 # ---- Selection --------------------------------------------------------------
 
 def select_for_job(session: Session, job: Job) -> dict[str, Any]:
-    """Choose the most suitable *approved* resume version for a job, with reasons."""
+    """Choose the most suitable *approved* resume version for a job, with reasons and warnings.
+
+    Coverage counts a job skill only when it appears in the resume's text **and** is confirmed in your
+    profile. Skills a resume mentions that your profile does not confirm are reported as warnings.
+    Nothing is generated or rewritten: if no approved resume fits, the result says so.
+    """
     category = job.category
     details = job.match_details or {}
-    job_skills = set((details.get("skills") or {}).get("mandatory", [])) | set((details.get("skills") or {}).get("preferred", []))
+    sk = details.get("skills") or {}
+    required = [x for x in (sk.get("mandatory") or [])]
+    preferred = [x for x in (sk.get("preferred") or [])]
+    job_skills = set(required) | set(preferred)
+    confirmed = profile_svc.confirmed_skills(session)
     resumes = [r for r in list_resumes(session) if r.active and r.latest_approved]
+    cats = settings_store.get(session, "role_categories")
+    base: dict[str, Any] = {"version": None, "missing": True, "fallback": False, "unsuitable": False, "alternatives": [],
+                            "reasons": [], "warnings": [], "coverage": {"required": [], "preferred": []},
+                            "not_in_resume": [], "category": category,
+                            "category_label": (cats.get(category) or {}).get("label") if category else None}
     if not resumes:
-        return {"version": None, "missing": True, "fallback": False, "alternatives": [],
-                "reason": "No approved resume exists. Import a resume and approve it."}
+        base["reason"] = "No approved resume exists. Import a resume and approve it."
+        base["warnings"].append("missing resume: import and approve at least one resume")
+        return base
+
+    def detected(r: Resume) -> set[str]:
+        return set((r.latest_approved.validation or {}).get("skills_detected") or [])
 
     def coverage(r: Resume) -> tuple[int, list[str]]:
-        detected = set((r.latest_approved.validation or {}).get("skills_detected") or [])
-        hits = sorted(job_skills & detected)
+        hits = sorted(job_skills & detected(r) & confirmed)
         return len(hits), hits
 
     def best_of(cands: list[Resume]) -> Resume:
         return max(cands, key=lambda r: (coverage(r)[0], r.latest_approved.version_no))
 
-    chosen, reason, fallback = None, "", False
+    chosen, fallback, reasons = None, False, []
     if category:
         exact = [r for r in resumes if r.category == category]
         if exact:
             chosen = best_of(exact)
-            reason = f"matches job category '{category}'"
+            reasons.append(f"its category matches the job's role category '{base['category_label'] or category}'")
+            if len(exact) > 1:
+                reasons.append(f"chosen among {len(exact)} '{category}' resumes for the best verified-skill coverage")
         else:
             for fb in FALLBACKS.get(category, []):
                 cands = [r for r in resumes if r.category == fb]
                 if cands:
                     chosen, fallback = best_of(cands), True
-                    reason = f"no approved '{category}' resume; using closest category '{fb}'"
+                    reasons.append(f"no approved '{category}' resume; '{fb}' is the closest related category")
                     break
     if chosen is None:
         masters = [r for r in resumes if r.is_master]
         if masters:
             chosen, fallback = best_of(masters), True
-            reason = ("job category unknown; " if not category else f"no approved resume for '{category}'; ") + "using master resume"
+            reasons.append(("the job's category is unknown" if not category else f"no approved resume for '{category}' "
+                            "or a related category") + "; using your master resume")
         else:
             chosen, fallback = best_of(resumes), True
-            reason = ("job category unknown" if not category else f"no approved resume for '{category}' or related") \
-                + "; chose the approved resume covering the most job skills"
-    n, hits = coverage(chosen)
+            reasons.append(("the job's category is unknown" if not category else f"no approved resume for '{category}' "
+                            "or related") + "; chose the approved resume covering the most verified job skills")
+    det = detected(chosen)
+    req_cov = sorted(set(required) & det & confirmed)
+    pref_cov = sorted(set(preferred) & det & confirmed)
     if job_skills:
-        reason += f"; covers {n}/{len(job_skills)} job skills" + (f" ({', '.join(hits)})" if hits else "")
-    alts = [{"resume": r.name, "version_id": r.latest_approved.id, "category": r.category, "coverage": coverage(r)[0]}
-            for r in resumes if r.id != chosen.id]
-    return {"version": chosen.latest_approved, "missing": False, "fallback": fallback, "reason": reason,
+        reasons.append(f"mentions {len(req_cov)}/{len(set(required))} required and {len(pref_cov)}/{len(set(preferred))} "
+                       "preferred job skills that your profile confirms")
+    warnings = []
+    unconfirmed_claims = sorted((job_skills & det) - confirmed)
+    if unconfirmed_claims:
+        warnings.append(f"the resume mentions {', '.join(unconfirmed_claims)}, which your profile does not confirm — "
+                        "check the resume is accurate or confirm the skill")
+    not_in_resume = sorted((set(required) & confirmed) - det)
+    if not_in_resume:
+        warnings.append(f"you have confirmed {', '.join(not_in_resume)} but this resume doesn't mention "
+                        f"{'it' if len(not_in_resume) == 1 else 'them'} (JobPilot won't edit it for you)")
+    unsuitable = bool(required) and len(req_cov) < 0.5 * len(set(required)) and (fallback or not category)
+    if unsuitable:
+        warnings.append("this resume covers less than half of the required skills — consider adding a suitable approved variant")
+    if fallback and category:
+        warnings.append(f"no resume variant for '{base['category_label'] or category}' — add one if you apply to these roles often")
+    if job.hard_conflict:
+        warnings.append("the job has a hard eligibility conflict; check before applying")
+    alts = [{"resume": r.name, "version_id": r.latest_approved.id, "category": r.category, "coverage": coverage(r)[0],
+             "skills": coverage(r)[1]} for r in resumes if r.id != chosen.id]
+    return {**base, "version": chosen.latest_approved, "missing": False, "fallback": fallback, "unsuitable": unsuitable,
+            "reason": "; ".join(reasons), "reasons": reasons, "warnings": warnings,
+            "coverage": {"required": req_cov, "preferred": pref_cov}, "not_in_resume": not_in_resume,
             "alternatives": sorted(alts, key=lambda a: -a["coverage"])}

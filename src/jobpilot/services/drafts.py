@@ -278,13 +278,22 @@ def create_draft(session: Session, data: DraftCreate, previous: EmailDraft | Non
         draft.application_id = application.id
     session.add(draft)
     session.flush()
+    if contact is not None and job is not None:
+        contact_svc.link_contact_job(session, contact, job, source=f"email draft #{draft.id}")
     audit.record(session, "draft.created", "email_draft", draft.id, kind=tpl.kind, missing=len(draft.missing_fields))
     return draft
 
 
 def edit_draft(session: Session, draft: EmailDraft, data: DraftEdit) -> EmailDraft:
+    from jobpilot.models import DraftRevision
+
     if draft.status in ("sent", "cancelled"):
         raise DraftError(f"Cannot edit a {draft.status} draft")
+    new_to = data.to_address.lower() if data.to_address else None
+    if (new_to, data.subject, data.body) != (draft.to_address, draft.subject, draft.body):
+        n = len(list(session.scalars(select(DraftRevision.id).where(DraftRevision.draft_id == draft.id)))) + 1
+        session.add(DraftRevision(draft_id=draft.id, revision_no=n, to_address=draft.to_address, subject=draft.subject,
+                                  body=draft.body, status_before=draft.status))
     draft.to_address = data.to_address.lower() if data.to_address else None
     draft.subject, draft.body = data.subject, data.body
     draft.missing_fields = sorted(set(MISSING_RE.findall(data.subject + "\n" + data.body)))
@@ -366,6 +375,13 @@ def cancel(session: Session, draft: EmailDraft) -> None:
     draft.status = "cancelled"
     draft.follow_up_due_at = None
     audit.record(session, "draft.cancelled", "email_draft", draft.id)
+
+
+def revisions(session: Session, draft: EmailDraft) -> list:
+    from jobpilot.models import DraftRevision
+
+    return list(session.scalars(select(DraftRevision).where(DraftRevision.draft_id == draft.id)
+                                .order_by(DraftRevision.revision_no.desc())))
 
 
 def thread_root(session: Session, draft: EmailDraft) -> EmailDraft:

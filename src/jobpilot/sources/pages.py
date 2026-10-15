@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from jobpilot.services.text_utils import clean_ws, html_to_text
 from jobpilot.sources.ats import GreenhouseAdapter, LeverAdapter
 from jobpilot.sources.base import FetchResult, JobData, parse_dt
-from jobpilot.sources.http import PoliteHttp
+from jobpilot.sources.http import PoliteHttp, is_temporary
 
 MAX_PAGES_PER_SOURCE = 50
 
@@ -93,6 +93,7 @@ def posting_to_job(posting: dict, page_url: str, company_name: str | None = None
         location=_location(posting),
         remote_type=remote,
         description_text=html_to_text(posting.get("description") or ""),
+        description_raw=posting.get("description") or None,
         posted_at=parse_dt(posting.get("datePosted")),
         valid_through=parse_dt(posting.get("validThrough")),
         source_url=page_url,
@@ -133,6 +134,7 @@ def extract_from_html(html_text: str, page_url: str, company_name: str | None = 
     if not title:
         return [], ["No JobPosting data or title found on page"]
     return [JobData(title=clean_ws(title)[:300], company_name=company_name, description_text=text[:50000],
+                    description_raw=str(main)[:200000],
                     source_url=page_url, apply_url=page_url, raw={"jsonld": False, "partial": True})], \
         ["No structured JobPosting data; extracted page title and text only — please review the details"]
 
@@ -167,6 +169,10 @@ class JsonLdAdapter:
                 result.items.extend(jobs)
                 result.errors.extend(f"{url}: {w}" for w in warnings)
             except Exception as exc:  # one bad page should not stop the rest
+                if getattr(exc, "status", None) in (404, 410):
+                    result.gone_urls.append(url)
+                elif is_temporary(exc):
+                    result.temporary_failures += 1
                 result.errors.append(f"{url}: {exc}")
         return result
 
@@ -250,7 +256,7 @@ def _row_to_job(row: dict) -> JobData | None:
         values["remote_type"] = rt if rt in ("remote", "hybrid", "onsite") else None
     if values.get("external_id") is not None:
         values["external_id"] = str(values["external_id"])
-    return JobData(raw={"import": True}, **values)
+    return JobData(raw={"import": True}, description_raw=values.get("description_text"), **values)
 
 
 def parse_import(filename: str, content: bytes) -> tuple[list[JobData], list[str]]:

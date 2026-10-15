@@ -30,6 +30,8 @@ class JobData:
     salary_currency: str | None = None
     salary_period: str | None = None
     raw: dict[str, Any] | None = None
+    # The description exactly as received (HTML or text), preserved for provenance.
+    description_raw: str | None = None
 
 
 @dataclass
@@ -40,6 +42,10 @@ class FetchResult:
     full_snapshot: bool = False
     errors: list[str] = field(default_factory=list)
     method: str = "api"
+    # Configured URLs that answered 404/410 (definitive "gone"), for page-based sources.
+    gone_urls: list[str] = field(default_factory=list)
+    # How many of ``errors`` were temporary (network, 429, 5xx) rather than definitive.
+    temporary_failures: int = 0
 
 
 class SourceAdapter(Protocol):

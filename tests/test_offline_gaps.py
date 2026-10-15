@@ -88,7 +88,7 @@ def test_ashby_adapter_synthetic_fixture(db, settings):
         job_svc.save_source(db, job_svc.SourceIn(name="x", kind="ashby", config={"board": "a/b"}))
     bad = make_http(settings, {"https://api.ashbyhq.com/posting-api/job-board/samplelabs": (200, '{"unexpected": 1}')})
     summary = job_svc.collect_all(db, settings, bad)
-    assert summary["sources"]["Sample Labs"]["errors"] and src.last_status == "partial"
+    assert summary["sources"]["Sample Labs"]["errors"] and src.last_status == "failed"
     assert db.scalar(select(Job).where(Job.title == "Backend Engineer (Python)")).status == "active", \
         "a malformed response must not expire existing jobs"
 
@@ -100,13 +100,13 @@ def test_ashby_adapter_synthetic_fixture(db, settings):
 def test_check_alive(db, settings, status, expected_job_status, message):
     job, _ = job_svc.add_manual(db, job_svc.ManualJobIn(title="Role", source_url="https://careers.example.com/jobs/9"))
     http = make_http(settings, {"https://careers.example.com/jobs/9": (status, "x")})
-    assert job_svc.check_alive(db, http, job).startswith(message)
+    assert job_svc.check_alive(db, http, job, initiated_by_user=True).startswith(message)
     assert job.status == expected_job_status
 
 
 def test_check_alive_without_url(db, settings):
     job, _ = job_svc.add_manual(db, job_svc.ManualJobIn(title="No URL"))
-    assert job_svc.check_alive(db, make_http(settings, {}), job) == "no URL to check"
+    assert job_svc.check_alive(db, make_http(settings, {}), job, initiated_by_user=True) == "no URL to check"
 
 
 # ---- Scheduler --------------------------------------------------------------------------
@@ -327,7 +327,8 @@ def test_assist_browser_launch_failure_recorded(db, settings):
     app = _app_for_assist(db, settings)
     settings.browser_enabled, settings.browser_headless = True, True
     settings.browser_channel = "no-such-browser-channel"
-    run = run_assist(db, settings, app, wait_for_user=False)
+    app.apply_url = "https://boards.greenhouse.io/examplecorp/jobs/1"
+    run = run_assist(db, settings, app, wait_for_user=False, approved_host="boards.greenhouse.io")
     assert run.status == "failed" and run.finished_at is not None and run.message
 
 
@@ -340,10 +341,16 @@ def test_assist_supported_path_and_confirmation_capture(db, settings, monkeypatc
     form = ('<form><label for=fn>First Name *</label><input id=fn name=first_name required>'
             '<label for=em>Email *</label><input id=em name=email required></form>'
             '<p>Thank you for applying! We have received your application.</p>')
-    app.apply_url = "data:text/html," + form
+    from tests.helpers import LocalPage
+
+    page = LocalPage(form)
+    app.apply_url = page.url
     settings.browser_enabled, settings.browser_headless = True, True
     monkeypatch.setattr(apply_mod, "site_for", lambda url: "greenhouse")  # treat the synthetic page as supported
-    run = apply_mod.run_assist(db, settings, app, wait_for_user=True, timeout_minutes=0.05)
+    try:
+        run = apply_mod.run_assist(db, settings, app, wait_for_user=True, timeout_minutes=0.05, approved_host=page.host)
+    finally:
+        page.close()
     if run.status == "failed" and "Executable" in (run.message or ""):
         pytest.skip(run.message)
     assert run.status == "closed", (run.status, run.message)
@@ -375,7 +382,7 @@ def test_cli_remaining_commands(tmp_path):
     assert _cli(tmp_path, "db", "upgrade").returncode == 0
     r = _cli(tmp_path, "add-url", "https://user:pw@careers.example.com/x")
     assert r.returncode == 1 and "credentials" in r.stderr and "Traceback" not in r.stderr
-    r = _cli(tmp_path, "assist", "999")
+    r = _cli(tmp_path, "assist", "999", "--approve-host", "boards.greenhouse.io")
     assert r.returncode == 1 and "not found" in r.stderr.lower()
     r = _cli(tmp_path, "scheduler", "run", "--task", "maintenance")
     assert ok(r)[0] and json.loads(r.stdout)["status"] == "success"

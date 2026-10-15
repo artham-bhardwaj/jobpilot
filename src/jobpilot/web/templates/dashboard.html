@@ -26,6 +26,12 @@
   <div class="stat"><a href="/interviews"><div class="v">{{ stats.upcoming|length }}</div><div class="l">upcoming interviews</div></a></div>
 </div>
 
+<section class="card">
+  <h2>Pipeline</h2>
+  <div class="actions" style="margin-top:0">{% for label, n, href in stats.funnel %}<a class="button" href="{{ href }}">{{ label }}: <b>{{ n }}</b></a>{% if not loop.last %}<span class="muted">→</span>{% endif %}{% endfor %}</div>
+  <p class="small muted">Applied counts only applications with recorded confirmation evidence.</p>
+</section>
+
 {% if stats.last_failure %}<div class="notice warn">Last failed task: {{ stats.last_failure.task_name }} at {{ stats.last_failure.started_at|dt }} — {{ stats.last_failure.message }} <a href="/system">System →</a></div>{% endif %}
 
 <div class="grid-2">

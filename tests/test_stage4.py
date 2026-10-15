@@ -250,9 +250,17 @@ def test_run_assist_unsupported_site_end_to_end(db, settings):
 
     job, _ = _setup(db, settings)
     app = apps.create(db, job)
-    app.apply_url = "data:text/html,<form><label for=e>Email</label><input id=e name=email></form>"
+    from tests.helpers import LocalPage
+
+    page = LocalPage("<form><label for=e>Email</label><input id=e name=email></form>")
+    app.apply_url = page.url
     settings.browser_enabled, settings.browser_headless = True, True
-    run = run_assist(db, settings, app, wait_for_user=False)
+    try:
+        refused = run_assist(db, settings, app, wait_for_user=False)
+        assert refused.status == "failed" and "approval" in refused.message, "no host approval -> nothing opened"
+        run = run_assist(db, settings, app, wait_for_user=False, approved_host=page.host)
+    finally:
+        page.close()
     if run.status == "failed" and "Executable" in (run.message or ""):
         pytest.skip(run.message)
     assert run.status == "unsupported", run.message

@@ -107,10 +107,53 @@ SKILLS: dict[str, tuple[str, list[str]]] = {
     "statistics": ("ml", ["statistics", "statistical modeling", "probability"]),
 }
 
-_INDEX: list[tuple[str, str]] = sorted(
-    ((alias, canon) for canon, (_, aliases) in SKILLS.items() for alias in aliases),
-    key=lambda x: -len(x[0]),
-)
+BUILTIN_SKILLS = dict(SKILLS)
+_INDEX: list[tuple[str, str]] = []
+_ACTIVE_KEY: str | None = None
+
+
+def _rebuild(skills: dict[str, tuple[str, list[str]]]) -> None:
+    global _INDEX
+    _INDEX = sorted(((alias, canon) for canon, (_, aliases) in skills.items() for alias in aliases),
+                    key=lambda x: -len(x[0]))
+
+
+def configure(extra: dict | None = None, disabled: list[str] | None = None) -> None:
+    """Apply your dictionary customisations on top of the built-in skills.
+
+    ``extra``: {"canonical name": {"category": "...", "aliases": ["...", ...]}} (new skills or extra aliases);
+    ``disabled``: canonical names to stop recognising.
+    """
+    import json
+
+    global _ACTIVE_KEY
+    key = json.dumps([extra or {}, sorted(disabled or [])], sort_keys=True)
+    if key == _ACTIVE_KEY:
+        return
+    merged = {k: (cat, list(al)) for k, (cat, al) in BUILTIN_SKILLS.items()}
+    for name, spec in (extra or {}).items():
+        canon = normalize(name)
+        if not canon:
+            continue
+        cat, aliases = merged.get(canon, (spec.get("category") or "custom", []))
+        aliases = list(dict.fromkeys(aliases + [canon] + [normalize(a) for a in spec.get("aliases", []) if normalize(a)]))
+        merged[canon] = (spec.get("category") or cat, aliases)
+    for name in disabled or []:
+        merged.pop(normalize(name), None)
+    SKILLS.clear()
+    SKILLS.update(merged)
+    _rebuild(SKILLS)
+    _ACTIVE_KEY = key
+
+
+def configure_from_settings(session) -> None:
+    from jobpilot.services import settings_store
+
+    cfg = settings_store.get(session, "skill_dictionary")
+    configure(cfg.get("extra"), cfg.get("disabled"))
+
+
+_rebuild(SKILLS)
 _AMBIGUOUS = {"go", "rest", "node", "ml", "torch", "spring", "rust", "js", "s3", "lambda"}
 
 

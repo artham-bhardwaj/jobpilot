@@ -86,8 +86,12 @@ def test_rerun_is_idempotent_and_expires_missing(db, settings):
     only_first = '{"jobs": [' + fixture_text("greenhouse_jobs.json").split('{"jobs": [')[1].split("},\n  {")[0] + "}]}"
     http2 = make_http(settings, {GH: (200, only_first)})
     third = job_svc.collect_all(db, settings, http2)
-    assert third["sources"]["Examplecorp"]["expired"] == 1
-    assert db.scalar(select(Job).where(Job.external_id == "1002")).status == "expired"
+    assert third["sources"]["Examplecorp"]["missing"] == 1 and third["sources"]["Examplecorp"]["expired"] == 0
+    gone = db.scalar(select(Job).where(Job.external_id == "1002"))
+    assert gone.status == "active" and gone.miss_count == 1, "one missed snapshot is not enough to expire"
+    fourth = job_svc.collect_all(db, settings, http2)
+    assert fourth["sources"]["Examplecorp"]["expired"] == 1
+    assert gone.status == "expired"
 
 
 def test_source_failure_is_recorded_not_fatal(db, settings):
@@ -96,7 +100,7 @@ def test_source_failure_is_recorded_not_fatal(db, settings):
     summary = job_svc.collect_all(db, settings, http)
     assert summary["failed"] == 1
     src = db.scalar(select(JobSource).where(JobSource.name == "Broken"))
-    assert src.last_status == "failed" and "500" in src.last_error
+    assert src.last_status == "unavailable" and "500" in src.last_error, "5xx is temporary, not a broken source"
 
 
 def test_source_config_validation(db):
@@ -148,7 +152,7 @@ def test_cross_source_dedup_and_repost(db):
     same = JobData(title="Backend Engineer (Remote)", company_name="Demo Widgets", location="Pune",
                    description_text="Java", external_id="zz")
     j2, o2 = job_svc.upsert(db, src_b, same, "manual")
-    assert o1 == "new" and o2 in ("unchanged", "updated") and j1.id == j2.id
+    assert o1 == "new" and o2 == "duplicate" and j1.id == j2.id
     assert len(j1.sightings) == 2
     job_svc.mark_expired(db, j1, "test")
     j3, o3 = job_svc.upsert(db, src_b, JobData(title="Backend Engineer", company_name="Demo Widgets",
@@ -171,7 +175,8 @@ def test_match_explained_and_eligibility(db):
     d = job.match_details
     assert job.category == "java_backend"
     assert job.relevance_score >= 70
-    assert {c["name"] for c in d["relevance"]["components"]} == {"role fit", "skills", "level", "location", "keywords", "salary"}
+    assert {c["key"] for c in d["relevance"]["components"]} == {"required_skills", "preferred_skills", "role_alignment",
+                                                                "experience_level", "education", "location", "preferences"}
     assert all(c["explanation"] for c in d["relevance"]["components"])
     assert d["skills"]["missing_mandatory"] == [] and d["skills"]["learning"] == ["kafka"]
     assert job.eligibility in ("eligible", "likely_eligible")
@@ -245,7 +250,7 @@ def test_resume_import_approve_select(db, settings):
     db.flush()
     db.expire_all()
     sel = rs.select_for_job(db, job)
-    assert sel["version"].id == v.id and not sel["fallback"] and "covers" in sel["reason"]
+    assert sel["version"].id == v.id and not sel["fallback"] and "that your profile confirms" in sel["reason"]
 
     py_job = _job(db, "Python Backend Developer", "Requirements: Python, Django")
     mv = rs.import_version(db, settings, master, "master.txt", b"Test Candidate\nPython Java")

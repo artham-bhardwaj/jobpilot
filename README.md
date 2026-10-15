@@ -51,15 +51,44 @@ is needed. Without Chrome, run `.venv/bin/playwright install chromium` and set t
 
 See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the full workflow.
 
+## Collecting jobs manually
+
+1. **Sources → Add source**, e.g. type `greenhouse`, config `{"board_token": "<company>"}` (from
+   `boards.greenhouse.io/<company>`), or `lever` / `ashby` / `jsonld` (see the formats on that page).
+2. Click **dry run** first. It fetches the board and shows what *would* be added, updated or expired without
+   saving any jobs. It still contacts the site, so only use sources you're allowed to read.
+3. Click **run**. Each run is recorded on the source's page (status, new/duplicate/missing/expired counts, 429s,
+   errors). Outages, rate limits, malformed responses and empty or collapsed listings never expire jobs; a job
+   expires only after consecutive successful runs no longer list it.
+
+CLI equivalents: `jobpilot collect --dry-run --source <id>` then `jobpilot collect --source <id>`.
+Other entry points: **Jobs → Add** (paste a job URL, upload CSV/JSON, or type a job in).
+
+## Reviewing jobs
+
+- **Review queue**: everything needing a decision, with the reason and the safest next action. Strong
+  matches, eligibility uncertainties, missing resume variants, missing profile facts, contacts to verify, drafts
+  to approve, paused browser sessions, failed operations. Bulk actions are limited to mark-reviewed / shortlist /
+  dismiss / acknowledge.
+- **Job page**: relevance (seven weighted components, each with evidence), eligibility (hard conflicts marked),
+  data confidence, required/preferred/mentioned-only skills, and where every parsed fact came from.
+- **Resume-selection review** (link on each job): which approved resume is chosen and why, against your
+  verified facts.
+- **Matching**: calibrate. Inspect score components across a sample, mark matches useful or irrelevant
+  (recorded only), preview other weights side by side, and save them explicitly.
+- **Start application** creates a persisted preparation record; add the form's questions, reuse approved
+  answers from the **Answer bank** (sensitive questions you always answer yourself), approve each answer, then
+  follow the checklist. "Applied" requires your confirmation evidence.
+
 ## Command line
 
 ```bash
 jobpilot serve [--port N]                 # dashboard
-jobpilot collect [--source ID ...]        # run job sources now
+jobpilot collect [--dry-run] [--source ID ...]  # run job sources (dry run saves nothing)
 jobpilot add-url URL [--company NAME]     # add one job posting
 jobpilot import-jobs FILE.csv|json        # import jobs
 jobpilot rematch                          # re-score active jobs
-jobpilot assist APPLICATION_ID            # open browser to help fill a form (never submits)
+jobpilot assist APP_ID --approve-host HOST # open browser for one approved site (never submits)
 jobpilot backup create|list|restore --name FILE
 jobpilot export jobs|applications|contacts|drafts|interviews|summary|all-json [--out FILE]
 jobpilot delete-data profile|contacts|outreach|everything [--include-backups]
@@ -74,7 +103,7 @@ jobpilot --debug <command>                # show a full traceback if something f
 ## Tests
 
 ```bash
-.venv/bin/pytest            # 173 tests, offline (fake HTTP, fake DNS), synthetic fixtures only
+.venv/bin/pytest            # 269 tests, offline (fake HTTP, fake DNS), synthetic fixtures only
 ```
 
 A few tests drive your local Chrome headlessly (PDF rendering, form-fill safety); they are skipped

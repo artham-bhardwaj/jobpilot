@@ -10,7 +10,9 @@ from jobpilot.services import drafts as ds
 
 
 def for_job(session: Session, job: Job) -> dict:
-    conds = [Contact.job_id == job.id]
+    from jobpilot.models import ContactJob
+
+    conds = [Contact.job_id == job.id, Contact.id.in_(select(ContactJob.contact_id).where(ContactJob.job_id == job.id))]
     if job.company_id:
         conds.append(Contact.company_id == job.company_id)
     contacts = list(session.scalars(select(Contact).where(or_(*conds)).order_by(Contact.confidence.desc())))

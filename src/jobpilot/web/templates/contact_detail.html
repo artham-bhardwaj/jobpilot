@@ -54,6 +54,21 @@
 </div>
 
 <section class="card">
+  <h2>Jobs &amp; applications</h2>
+  {% for j, rel, how in linked %}<div class="small"><a href="/jobs/{{ j.id }}">{{ j.title }}</a> · {{ j.company_name or "?" }} · {{ rel }}
+    <span class="muted">({{ how or "linked" }})</span>
+    {% if apps_for.get(j.id) %} · <a href="/applications/{{ apps_for[j.id].id }}">application</a> {{ badge(apps_for[j.id].status) }}{% endif %}
+    <form method="post" action="/contacts/{{ c.id }}/link-job" class="inline"><input type="hidden" name="job_id" value="{{ j.id }}"><input type="hidden" name="unlink" value="1"><button class="small">unlink</button></form></div>
+  {% else %}<p class="muted small">Not linked to any job.</p>{% endfor %}
+  {% if link_candidates %}
+  <form method="post" action="/contacts/{{ c.id }}/link-job" class="filters">
+    <label class="field"><span>Link to a job</span><select name="job_id">{% for j in link_candidates %}<option value="{{ j.id }}">{{ j.title }} · {{ j.company_name or "?" }}</option>{% endfor %}</select></label>
+    <label class="field"><span>Their role for this job</span><select name="relation">{% for r in ["recruiter","hiring_manager","referral","other"] %}<option {% if r == c.role_type %}selected{% endif %}>{{ r }}</option>{% endfor %}</select></label>
+    <div class="actions"><button>Link</button></div>
+  </form>{% endif %}
+</section>
+
+<section class="card">
   <h2>Contact history</h2>
   {% if c.interactions %}
   <table class="table compact">

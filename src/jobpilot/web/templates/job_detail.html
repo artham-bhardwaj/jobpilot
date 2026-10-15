@@ -24,16 +24,24 @@
 </div>
 
 {% if not job.matched_at %}<div class="notice warn">This job hasn't been scored with your current profile and settings yet. Click <b>Re-score</b>.</div>{% endif %}
+{% if m.recommendation %}
+<div class="notice {{ 'bad' if m.recommendation.key == 'not_suitable' else ('warn' if m.recommendation.key in ('stretch', 'borderline') else '') }}">
+  <b>{{ m.recommendation.label }}</b>
+  {% if m.eligibility and m.eligibility.hard_conflicts %} — {{ m.eligibility.hard_conflicts|join("; ") }}. A high relevance score does not override this.{% endif %}
+  · data confidence {{ badge(job.confidence or "—", "b-ok" if job.confidence == "high" else ("b-warn" if job.confidence == "medium" else "b-failed")) }}
+</div>{% endif %}
 {% if m.review_reasons %}<div class="notice warn"><b>Needs your review:</b> {{ m.review_reasons|join("; ") }}</div>{% endif %}
 
 <div class="grid-2">
 <section class="card">
-  <h2>Relevance {{ score(job.relevance_score) }} <span class="muted small">threshold {{ m.relevance.threshold if m.relevance else "" }}</span></h2>
+  <h2>Relevance {{ score(job.relevance_score) }} <span class="muted small">relevant ≥ {{ m.relevance.threshold if m.relevance else "" }}{% if m.relevance and m.relevance.strong_threshold %}, strong ≥ {{ m.relevance.strong_threshold }}{% endif %}</span></h2>
   {% if m.relevance and m.relevance.excluded_by %}<div class="notice bad">Excluded by keyword(s): {{ m.relevance.excluded_by|join(", ") }}</div>{% endif %}
   {% if m.relevance %}
   <table class="table compact">
-    {% for c in m.relevance.components %}<tr><td class="nowrap">{{ c.name }}</td><td class="nowrap">{{ c.points }} / {{ c.max }}</td><td class="wrap">{{ c.explanation }}</td></tr>{% endfor %}
+    {% for c in m.relevance.components %}<tr><td class="nowrap">{{ c.name }}</td><td class="nowrap">{{ c.points }} / {{ c.max }}</td>
+      <td class="wrap">{{ c.explanation }}{% if c.evidence %}<details><summary class="small">evidence</summary><ul class="small">{% for e in c.evidence %}<li>{{ e }}</li>{% endfor %}</ul></details>{% endif %}</td></tr>{% endfor %}
   </table>
+  <p class="small muted"><a href="/matching">Weights and calibration →</a></p>
   {% endif %}
   {% if m.category %}<p class="small muted">Category: {{ m.category.label or "none" }} (confidence {{ m.category.confidence }})</p>{% endif %}
 </section>
@@ -41,35 +49,47 @@
 <section class="card">
   <h2>Eligibility {{ badge(job.eligibility) }}</h2>
   <p class="muted small">Based on the posting's stated requirements and your <b>confirmed</b> profile facts. Unknown
-  requirements are never treated as met.</p>
+  requirements are never treated as met. <b>HARD</b> = a conflict that makes the job unsuitable regardless of score.</p>
   {% if m.eligibility %}
   <table class="table compact">
-    {% for c in m.eligibility.checks %}<tr><td class="nowrap">{{ c.name }}</td><td>{{ badge(c.status) }}</td><td class="wrap">{{ c.explanation }}</td></tr>{% endfor %}
+    {% for c in m.eligibility.checks %}<tr><td class="nowrap">{{ c.name }}</td><td class="nowrap">{{ badge(c.status) }}{% if c.hard %} {{ badge("HARD", "b-failed") }}{% endif %}</td><td class="wrap">{{ c.explanation }}</td></tr>{% endfor %}
   </table>
   {% endif %}
-  {% if m.missing_info %}<p class="small"><b>Missing information:</b> {{ m.missing_info|join(", ") }}</p>{% endif %}
+  {% if m.missing_profile_info %}<p class="small"><b>Missing from your profile:</b> {{ m.missing_profile_info|join(", ") }} — <a href="/profile">add if accurate</a></p>{% endif %}
+  {% if m.missing_job_info %}<p class="small"><b>Not stated in the posting:</b> {{ m.missing_job_info|join(", ") }}</p>{% endif %}
+  {% if m.confidence %}<details><summary class="small">data confidence: {{ m.confidence.level }}</summary><ul class="small">
+    {% for sgn in m.confidence.signals %}<li>{{ "✔" if sgn.ok else "✖" }} {{ sgn.name }}</li>{% endfor %}</ul></details>{% endif %}
 </section>
 </div>
 
 <div class="grid-2">
 <section class="card">
   <h2>Skills</h2>
-  {% if m.skills %}
-    <p><b>Required:</b> {% for s in m.skills.mandatory %}<span class="tag {{ 'have' if s in m.skills.have else ('learn' if s in m.skills.learning else 'miss') }}">{{ s }}</span>{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
-    <p><b>Preferred:</b> {% for s in m.skills.preferred %}<span class="tag {{ 'have' if s in m.skills.have else ('learn' if s in m.skills.learning else 'miss') }}">{{ s }}</span>{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
-    {% if m.skills.alternatives %}<p class="small muted">Alternatives (any one suffices): {% for g in m.skills.alternatives %}{{ g|join(" / ") }}{% if not loop.last %}; {% endif %}{% endfor %}</p>{% endif %}
-    <p class="small muted"><span class="tag have">have</span> confirmed · <span class="tag learn">learning</span> · <span class="tag miss">missing</span></p>
+  {% if m.skills %}{% set sk = m.skills %}
+    {% macro skill_tag(s) %}<span class="tag {{ 'have' if s in sk.have else ('learn' if s in (sk.learning or []) or s in (sk.unverified or []) else 'miss') }}"
+      title="{{ (sk.candidate or {}).get(s, '') }}{% if sk.job_evidence and s in sk.job_evidence %} — {{ sk.job_evidence[s].where }}{% endif %}">{{ s }}{% if s in (sk.unverified or []) %} (unverified){% endif %}</span>{% endmacro %}
+    <p><b>Required:</b> {% for s in sk.mandatory %}{{ skill_tag(s) }}{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
+    <p><b>Preferred:</b> {% for s in sk.preferred %}{{ skill_tag(s) }}{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
+    {% if sk.mentioned %}<p class="small"><b>Mentioned only</b> (not treated as requirements): {% for s in sk.mentioned %}<span class="tag">{{ s }}</span>{% endfor %}</p>{% endif %}
+    {% if sk.alternatives %}<p class="small muted">Alternatives (any one suffices): {% for g in sk.alternatives %}{{ g|join(" / ") }}{% if not loop.last %}; {% endif %}{% endfor %}</p>{% endif %}
+    <p class="small muted"><span class="tag have">have</span> confirmed · <span class="tag learn">learning / unverified</span> · <span class="tag miss">missing</span> · hover a skill for evidence ·
+      <a href="/jobs/{{ job.id }}/resume-review">resume-selection review →</a></p>
   {% endif %}
-  {% if m.requirements %}
+  {% if m.requirements %}{% set ev = m.requirements.evidence or {} %}
+  {% macro basis(key) %}{% if key in ev %}<span class="muted small"> [{{ ev[key].basis }}{% if ev[key].snippet %}: “{{ ev[key].snippet[:70] }}”{% endif %}]</span>{% endif %}{% endmacro %}
   <table class="kv small">
-    <tr><th>Experience</th><td>{% if m.requirements.experience_min_years is not none %}{{ m.requirements.experience_min_years }}{% if m.requirements.experience_max_years %}–{{ m.requirements.experience_max_years }}{% endif %} years <span class="muted">("{{ m.requirements.experience_evidence }}")</span>{% else %}not stated{% endif %}</td></tr>
-    <tr><th>Level</th><td>{{ job.experience_level or "not stated" }}</td></tr>
-    <tr><th>Sponsorship</th><td>{{ m.requirements.sponsorship|replace("_", " ") }}</td></tr>
-    <tr><th>Degree</th><td>{{ m.requirements.degree_required or "not stated" }}</td></tr>
+    <tr><th>Experience</th><td>{% if m.requirements.experience_min_years is not none %}{{ m.requirements.experience_min_years }}{% if m.requirements.experience_max_years %}–{{ m.requirements.experience_max_years }}{% endif %} years{% else %}unknown{% endif %}{{ basis("experience") }}</td></tr>
+    <tr><th>Seniority</th><td>{{ job.experience_level or "unknown" }}{{ basis("seniority") }}</td></tr>
+    <tr><th>Employment type</th><td>{{ job.employment_type or "unknown" }}{{ basis("employment_type") }}</td></tr>
+    <tr><th>Work mode</th><td>{{ job.remote_type }}{{ basis("work_mode") }}</td></tr>
+    <tr><th>Sponsorship</th><td>{{ m.requirements.sponsorship|replace("_", " ") }}{{ basis("sponsorship") }}</td></tr>
+    <tr><th>Degree</th><td>{{ m.requirements.degree_required or "not required / unknown" }}{% if m.requirements.degree_equivalent_ok %} (or equivalent experience){% endif %}{{ basis("degree") }}</td></tr>
     <tr><th>Location constraints</th><td>{{ m.requirements.location_constraints|join("; ") or "none stated" }}{% if m.requirements.relocation_offered %} · relocation offered{% endif %}</td></tr>
-    <tr><th>Salary</th><td>{% if job.salary_min or job.salary_max %}{{ "{:,}".format(job.salary_min) if job.salary_min else "?" }} – {{ "{:,}".format(job.salary_max) if job.salary_max else "?" }} {{ job.salary_currency or "" }} {{ job.salary_period or "" }}{% else %}not stated{% endif %}</td></tr>
-    <tr><th>Posted</th><td>{{ job.posted_at|d }}{% if job.valid_through %} · open until {{ job.valid_through|d }}{% endif %}</td></tr>
+    <tr><th>Salary</th><td>{% if job.salary_min or job.salary_max %}{{ "{:,}".format(job.salary_min) if job.salary_min else "?" }} – {{ "{:,}".format(job.salary_max) if job.salary_max else "?" }} {{ job.salary_currency or "" }} {{ job.salary_period or "" }}{% else %}unknown{% endif %}{{ basis("salary") }}</td></tr>
+    <tr><th>Deadline</th><td>{{ m.requirements.deadline or "unknown" }}{{ basis("deadline") }}</td></tr>
+    <tr><th>Posted / checked</th><td>{{ job.posted_at|d }} · last checked {{ job.last_checked_at|dt }}{% if job.last_check_status %} ({{ job.last_check_status }}){% endif %}</td></tr>
   </table>
+  <p class="small muted">explicit = stated in the text · structured = provided by the source's data · inferred = derived (e.g. from the title) · unknown = not stated</p>
   {% endif %}
 </section>
 
@@ -82,7 +102,8 @@
       <a href="/resumes/versions/{{ selection.version.id }}/download">download</a>
       {% if selection.fallback %}{{ badge("fallback", "b-warn") }}{% endif %}</p>
     <p class="small">{{ selection.reason }}</p>
-    {% if selection.fallback %}<div class="notice warn small">No resume is tailored to this category. Consider adding an approved one — JobPilot will not write it for you.</div>{% endif %}
+    {% for w in selection.warnings or [] %}<div class="notice warn small">{{ w }}</div>{% endfor %}
+    <p class="small"><a href="/jobs/{{ job.id }}/resume-review">Full resume-selection review →</a></p>
     {% if selection.alternatives %}<details><summary class="small">alternatives</summary><ul class="small">
       {% for a in selection.alternatives %}<li>{{ a.resume }} ({{ a.category }}) — covers {{ a.coverage }} job skill(s)</li>{% endfor %}</ul></details>{% endif %}
   {% endif %}

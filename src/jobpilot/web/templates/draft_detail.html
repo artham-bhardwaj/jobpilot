@@ -7,7 +7,8 @@
 <p class="muted">
   {% if d.contact %}To <a href="/contacts/{{ d.contact.id }}">{{ d.contact.display_name }}</a>{% endif %}
   {% if d.job %} · re <a href="/jobs/{{ d.job.id }}">{{ d.job.title }}</a> at {{ d.job.company_name or "?" }}{% endif %}
-  {% if d.resume_version %} · resume: <a href="/resumes/versions/{{ d.resume_version.id }}/download">{{ d.resume_version.label }}</a>{% endif %}
+  {% if d.resume_version %} · resume: <a href="/resumes/versions/{{ d.resume_version.id }}/download">{{ d.resume_version.label }}</a>{% else %} · no resume attached{% endif %}
+  {% if d.application_id %} · <a href="/applications/{{ d.application_id }}">application #{{ d.application_id }}</a>{% endif %}
 </p>
 {% for w in warnings %}<div class="notice warn">{{ w }}</div>{% endfor %}
 {% if d.missing_fields %}<div class="notice bad">Fill in before approving (replace the <code>[[MISSING: …]]</code> markers with real information — nothing will be invented for you): {{ d.missing_fields|join(", ") }}</div>{% endif %}
@@ -57,6 +58,14 @@ Subject: {{ d.subject }}
     {% if d.status in ("draft", "approved") %}{{ post_button("/drafts/" ~ d.id ~ "/cancel", "Cancel draft", "danger", confirm="Cancel this draft?") }}{% endif %}
   </div>
 </section>
+
+{% if revisions %}
+<section class="card">
+  <h2>Revision history ({{ revisions|length }})</h2>
+  {% for r in revisions %}<details><summary class="small">revision {{ r.revision_no }} · {{ r.created_at|dt }} · was {{ r.status_before }}</summary>
+    <div class="small">To: {{ r.to_address or "—" }}<br>Subject: {{ r.subject }}</div><div class="desc">{{ r.body }}</div></details>{% endfor %}
+</section>
+{% endif %}
 
 <section class="card">
   <h2>Timeline</h2>

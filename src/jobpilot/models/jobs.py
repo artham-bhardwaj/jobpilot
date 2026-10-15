@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from jobpilot.models.base import Base, TimestampMixin, utcnow
@@ -41,6 +41,7 @@ class JobSource(TimestampMixin, Base):
     last_status: Mapped[str | None] = mapped_column(String(20))
     last_error: Mapped[str | None] = mapped_column(Text)
     last_stats: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class Job(TimestampMixin, Base):
@@ -89,6 +90,16 @@ class Job(TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text)
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
+    # Milestone 8: provenance, liveness and assessment summary columns.
+    description_raw: Mapped[str | None] = mapped_column(Text)  # exactly as received (HTML or text)
+    apply_url_canonical: Mapped[str | None] = mapped_column(String(1000), index=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_check_status: Mapped[str | None] = mapped_column(String(60))
+    # Consecutive successful snapshots of the job's own source that did not list it.
+    miss_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    confidence: Mapped[str | None] = mapped_column(String(10), index=True)  # high|medium|low
+    hard_conflict: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
+
     sightings: Mapped[list[JobSighting]] = relationship(
         back_populates="job", cascade="all, delete-orphan", order_by="JobSighting.seen_at"
     )
@@ -114,3 +125,50 @@ class JobSighting(Base):
 
     job: Mapped[Job] = relationship(back_populates="sightings")
     source: Mapped[JobSource | None] = relationship()
+
+
+class SourceRun(Base):
+    """History of each collection attempt for a source (including dry runs)."""
+
+    __tablename__ = "source_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("job_sources.id", ondelete="CASCADE"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    trigger: Mapped[str] = mapped_column(String(20), default="manual")  # manual|scheduled
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # success | partial | unavailable (network/5xx/429: nothing expired) | failed (config/parse) | anomaly
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    fetched: Mapped[int] = mapped_column(Integer, default=0)
+    new: Mapped[int] = mapped_column(Integer, default=0)
+    updated: Mapped[int] = mapped_column(Integer, default=0)
+    unchanged: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates: Mapped[int] = mapped_column(Integer, default=0)  # matched a job first seen via another source
+    reposts: Mapped[int] = mapped_column(Integer, default=0)
+    expired: Mapped[int] = mapped_column(Integer, default=0)
+    missing: Mapped[int] = mapped_column(Integer, default=0)  # absent this run but not yet expired
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    rate_limited: Mapped[int] = mapped_column(Integer, default=0)
+    http_errors: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    warnings: Mapped[list[Any] | None] = mapped_column(JSON)
+
+    source: Mapped[JobSource] = relationship()
+
+
+class MatchFeedback(Base):
+    """Your judgement of a match. Used for calibration reports only; never changes scoring by itself."""
+
+    __tablename__ = "match_feedback"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    verdict: Mapped[str] = mapped_column(String(20))  # useful|irrelevant
+    note: Mapped[str | None] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column(Float)
+    eligibility: Mapped[str | None] = mapped_column(String(20))
+    weights: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    job: Mapped[Job] = relationship()

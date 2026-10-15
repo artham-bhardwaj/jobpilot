@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from jobpilot.models.base import Base, TimestampMixin, utcnow
@@ -34,6 +34,9 @@ class Application(TimestampMixin, Base):
     confirmation_method: Mapped[str | None] = mapped_column(String(30))
     confirmation_note: Mapped[str | None] = mapped_column(Text)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Snapshot taken when preparation is (re)generated: match, warnings, facts, missing info, URL.
+    preparation: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    prepared_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     job: Mapped[Job] = relationship()
     resume_version: Mapped[ResumeVersion | None] = relationship()
@@ -111,3 +114,40 @@ class BrowserRun(Base):
     message: Mapped[str | None] = mapped_column(Text)
 
     application: Mapped[Application] = relationship(back_populates="browser_runs")
+
+
+ANSWER_CATEGORIES = ("general", "experience", "motivation", "logistics", "sensitive")
+
+
+class AnswerBankEntry(TimestampMixin, Base):
+    """A reusable answer you wrote. Sensitive answers are never suggested or filled automatically."""
+
+    __tablename__ = "answer_bank"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(20), default="general")
+    # Role categories this answer applies to (empty = any).
+    role_categories: Mapped[list[Any] | None] = mapped_column(JSON)
+    sensitive: Mapped[bool] = mapped_column(Boolean, default=False)
+    approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ApplicationQuestion(TimestampMixin, Base):
+    """A question asked by one application form, and your answer for this application."""
+
+    __tablename__ = "application_questions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(20), default="manual")  # manual|browser
+    sensitive: Mapped[bool] = mapped_column(Boolean, default=False)
+    answer: Mapped[str | None] = mapped_column(Text)
+    answer_source: Mapped[str | None] = mapped_column(String(40))  # manual|bank:<id>
+    status: Mapped[str] = mapped_column(String(20), default="unanswered")  # unanswered|approved
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    application: Mapped[Application] = relationship()

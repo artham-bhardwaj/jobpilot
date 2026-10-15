@@ -1,16 +1,55 @@
 # JobPilot — implementation status
 
-**Source of truth for what is verified.** Last updated: 2026-10-15, after Stage 7 (hardening).
-Repository has no commits; nothing is tracked by Git. `docs/CHECKLIST.md` is superseded by this file.
+**Source of truth for what is verified.** Last updated: 2026-10-15, after Milestone 8 (Stages A–K, 269 tests passing).
+Baseline commit `19f3d19`; all Milestone 8 work is uncommitted. `docs/CHECKLIST.md` is superseded by this file.
 
 Legend: **Verified** = exercised by automated tests and/or the live local checks below.
 **Offline-verified** = tested only against recorded/synthetic responses; the live service has not been contacted.
+
+## Milestone 8 — starting state (2026-10-15)
+
+Milestone: real-world discovery, matching, resume selection, recruiter workflows, reliable job pipeline.
+
+- Git: baseline commit `19f3d19` exists; uncommitted = the cross-origin/flash-message fix (§3a) + its test.
+- Tests at start: **178 passed** (`.venv/bin/pytest`, 94 s).
+- Your running server (port 8794): `/` 200, `/health` ok, schema 0005, `Referrer-Policy: same-origin`.
+  The cross-origin form issue does **not** reproduce with the current code.
+- Your data (`./data`, read-only inspection): 1 candidate-profile row, 1 audit entry, nothing else. It is preserved;
+  new migrations take an automatic backup before upgrading a non-empty database.
+- Reusable as-is: source adapters (Greenhouse/Lever/Ashby/JSON-LD/import), polite HTTP client with SSRF guard,
+  dedup/provenance, parser, matcher, resume library/selection, contacts/DNC, deterministic drafts, application
+  lifecycle with evidence gate, review items, Playwright assist, scheduler/task runner, backups, analytics.
+- Gaps against this milestone: no per-run source history/health page or dry run; snapshot expiry could expire
+  everything after one empty-but-valid response; no canonical apply-URL dedup; no explicit-vs-inferred provenance
+  for parsed fields; incidental skill mentions can become "required"; fixed matching weights; no data-confidence
+  assessment or hard-conflict flag; no calibration/feedback; no resume-selection review view; no contact↔job
+  associations, duplicate-contact merge or company pages; no draft revision history; review queue lacks categories,
+  filters, pagination and bulk actions; no preparation snapshot or answer bank; browser assist lacks per-site
+  approval; analytics lack new-vs-duplicate, resume-by-category and skill-gap reports; scheduler thread isn't stopped
+  on shutdown and has no "next run" display.
+
+### Milestone 8 — progress log
+
+| Stage | Result | Tests |
+|---|---|---|
+| A. Baseline | 178 passed; server healthy; your data preserved | 178 |
+| B. Regressions | none found | — |
+| C. Source engine | migration 0006 (verified on a copy of your DB: rows identical, auto-backup taken); canonical apply-URL dedup; duplicates from other sources add provenance but never overwrite (bug found and fixed); expiry only after N consecutive misses; empty or collapsed listings = "anomaly" (nothing expired); run status success/partial/unavailable/failed/anomaly; per-run history with 429 and HTTP-error counts; dry run (rolled back); Sources health and per-source history pages; job-data URLs fetched only on your explicit check | 200 |
+| D. Parsing & matching | explicit/structured/inferred/unknown provenance per field; required/preferred/**mentioned-only** skills with snippets; employment type, deadline, "or equivalent experience"; configurable skill dictionary; 7 configurable weights; data-confidence level; hard vs soft conflicts (hard → "not suitable" whatever the score); unverified/learning/missing skills distinguished; work vs personal-project evidence; calibration page with feedback (recorded only), read-only weight preview, explicit save; 17 parsing regression fixtures. Fixed along the way: degree stated under "nice to have" was missed; inline "Requirements:" lines and Lever's "What you need" heading were not recognised; unknown info used to add up to borderline scores; `settings_store.reset` didn't flush | 230 |
+| E. Resume selection | coverage counts only skills in the resume **and** confirmed in your profile; warnings for unconfirmed resume claims, confirmed skills absent from the resume, unsuitable or missing variants; read-only resume-selection review page | 236 |
+| F. Review queue & preparation | central queue (12 categories, reasons, recommended next action, safe actions, filter/sort/pagination); bulk limited to mark-reviewed / shortlist / dismiss / acknowledge (never approve, send or submit); acknowledgements persist (stable ids); persisted application preparation record; answer bank (sensitive questions never suggested or auto-filled); application questions with per-answer approval; unanswered questions block "ready for review"; questions found by browser assistance are recorded; redirects restricted to local paths | 247 |
+| — Interruption recovery | task was interrupted before the post-F full run. Recovered: tree compiles; **247 passed, 0 failed**; app starts on a fresh data dir (schema 0006, all pages 200). Your DB still at 0005 (migrates with backup when your server restarts). Half-wired: `ContactJob` read but never written, `DraftRevision` unused → Stage G | 247 |
+| G. Recruiters & companies | contact↔job links (manual, from drafts, from postings); duplicate-contact finder and merge (explicit confirm; the kept contact's values win, blanks filled; do-not-contact never lost; "verified" kept only with a note; interactions/drafts/links moved; audited); company pages with editable notes and safe URLs; draft revision history (saved on every content change); drafts link to their application | 252 |
+| H. Browser assistance | assist refuses unless you approve the exact host of the application URL (web: checkbox + host; CLI: `--approve-host`); optional `browser.autofill_sites` allow-list; approval audited; unknown and sensitive fields become application questions; still never submits or ticks consent (headless tests on a 127.0.0.1 page) | 257 |
+| I. Analytics | collection by source (new vs duplicate, dry runs excluded, duplicate share only with a minimum sample); review-queue counts; resume selection by role category (exact/fallback/missing); common skill gaps; CSV exports `sources` and `skill_gaps` (formula-injection guard); dashboard "Pipeline" funnel (Applied counts only evidence-backed submissions) | 261 |
+| J. Reliability | background scheduler thread stopped on app shutdown; job expiry only from explicit deadlines (vague "closing in January" ignored); "Next run" + task labels on the System page, with a note that nothing runs while the laptop sleeps; backup/restore keeps the new tables; a schema-0005 backup is upgraded to 0006 on restore | 267 |
+| K. Acceptance | one end-to-end offline test across the 18 criteria (import → dedup → provenance → required/preferred → relevance vs eligibility with evidence → resume selection → queue → preparation record → recruiter draft → missing-info blocks → browser stops before submit → evidence-gated "applied" → security → backup/restore → pages) plus a check that no AI/LLM SDK is a dependency or import. **Full suite: 269 passed, 0 failed, 0 skipped (142 s).** | 269 |
 
 ## Summary (Stage 7 results)
 
 | Check | Before Stage 7 (audit) | After Stage 7 |
 |---|---|---|
-| Automated tests | 87 passed, 3 warnings | **173 passed, 0 failed, 0 skipped, 0 warnings** (`ResourceWarning` now fails the suite) |
+| Automated tests | 87 passed, 3 warnings | **178 passed** (173 at end of Stage 7; +5 from the §3a fixes), 0 warnings |
 | Tests run from a different working directory | 1 failure | **173 passed** (from `/tmp`, JUnit: errors=0 failures=0 skipped=0) |
 | Route probe: 93 handlers, missing IDs / empty forms | 6 × HTTP 500 | **0 × 5xx** (original audit script, unchanged) |
 | Route probe: 33 targeted invalid requests | 8 × HTTP 500 | **0 × 5xx** (original audit script, unchanged) |
@@ -117,7 +156,9 @@ Offline tests passing does **not** mean these work live. None has contacted a re
 | JSON-LD career pages on real employer sites | Offline-verified only. Real pages vary widely. |
 | Gmail OAuth, drafts, send, reply sync, interview import | Offline-verified only (mocked Google endpoints, simulated browser). Needs your Google Cloud OAuth client. |
 | Browser assist on a real Greenhouse/Lever form, headed, with you completing it | Not run. Headless synthetic-form tests only. |
-| Spawning `jobpilot assist` from the web UI with browser enabled | Not run (only the disabled path and the CLI error path are tested). |
+| Spawning `jobpilot assist` from the web UI with browser enabled | Not run (only the disabled path, the host-approval refusal and the CLI error path are tested). |
+| Milestone 8 source health/expiry against real boards (429s, real empty boards, reposts) | Offline-verified only. |
+| Matching calibration on real postings | Not done; weights are defaults until you review real jobs on `/matching`. |
 | systemd user timer installed and firing on your machine | Unit files generated and tested; not installed. |
 | PDF generation | Verified with the local Chrome (headless). Not tested on other machines. |
 
@@ -128,13 +169,30 @@ Offline tests passing does **not** mean these work live. None has contacted a re
 - **DNS rebinding window**: the address check and the actual connection resolve DNS separately, so a hostile DNS
   server could switch answers in between. Pinning the connection to the checked IP would close this. Low risk for a
   single-user tool that only fetches URLs you configure.
-- Backups are not encrypted (0600 files in a 0700 directory).
+- Backups are **not encrypted** (0600 files in a 0700 directory). Keep them private; anyone who can read them can
+  read everything JobPilot stores.
+- Your database (`./data`) is still at schema 0005 (1 profile row, untouched). Your earlier server on port 8794 is no longer running; the next `jobpilot serve` migrates it to 0006, taking an automatic backup first.
+- Parsing is rule-based: unusual posting layouts may leave requirements as "unknown" (scored 0, flagged low confidence)
+  rather than guessed. Contact duplicate detection uses email/name+company only.
+- Scheduled tasks don't run while the laptop is asleep or the server is stopped; they catch up on the next due check.
 - The umask change applies to the whole JobPilot process (intended: everything it writes is private).
 - Skill extraction uses a fixed ~90-entry dictionary; no currency conversion; interview time zones are labels.
 - Gmail interview import matches applications by company name in the message text.
 - No JavaScript-rendered or login-walled career sites.
 - `services/registry.py` still has `ImportError` fallbacks that can no longer trigger (harmless; left as-is).
 - Test suite takes about 2 minutes (subprocess CLI tests and headless Chrome tests dominate).
+
+## 3a. Post-Stage-7 fixes (reported by user, 2026-10-15)
+
+- **Every form save failed with "Cross-origin request blocked" in real browsers.** Cause: the Stage 1 security header
+  `Referrer-Policy: no-referrer` makes Chrome send `Origin: null` on form posts, which the CSRF check correctly
+  rejects. Missed because TestClient doesn't emulate browser Origin behaviour, and the earlier Chrome checks only
+  loaded pages without submitting forms. Fix: `Referrer-Policy: same-origin`. That still sends no referrer to
+  external sites, and the CSRF check is unchanged. Null-origin blocks are now logged.
+  Regression test: `tests/test_browser_forms.py` submits forms in headless Chrome against a live server.
+- **Flash messages after anchor redirects were never shown** (`/profile#skills?msg=…`: the query was placed
+  inside the fragment), including error messages. Fixed in `redirect()`, with a unit test.
+- Tests: **178 passed**.
 
 ## 4. Failed tests and open defects
 

@@ -45,6 +45,8 @@ class SameOriginMiddleware(BaseHTTPMiddleware):
                     log.warning("blocked cross-origin request", extra={"origin": origin, "path": request.url.path})
                     return PlainTextResponse("Cross-origin request blocked", status_code=403)
             elif origin == "null" or request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
+                log.warning("blocked cross-origin request", extra={
+                    "origin": origin, "sec_fetch_site": request.headers.get("sec-fetch-site"), "path": request.url.path})
                 return PlainTextResponse("Cross-origin request blocked", status_code=403)
         return await call_next(request)
 
@@ -58,7 +60,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # "same-origin": no referrer is ever sent to other sites, but the browser keeps sending our own
+        # Origin on form posts. ("no-referrer" makes Chrome send "Origin: null", which the CSRF check rejects.)
+        response.headers.setdefault("Referrer-Policy", "same-origin")
         return response
 
 
@@ -132,6 +136,11 @@ def create_app(settings: Settings | None = None, run_migrations: bool = True) ->
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
+        # Safe shutdown: stop the optional scheduler thread (waits for a running task to finish).
+        thread = getattr(_app.state, "scheduler_thread", None)
+        if thread is not None:
+            thread.stop_event.set()
+            thread.join(timeout=60)
         _app.state.engine.dispose()
 
     # No Swagger/ReDoc UI (they load third-party CDN assets); the JSON schema is opt-in.

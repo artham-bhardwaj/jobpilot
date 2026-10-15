@@ -46,12 +46,14 @@
   <h2>Scheduled tasks</h2>
   <p class="muted small">Run manually here, or enable them under Settings → <code>scheduler</code>. They run only while your
   computer is on: either with <code>JOBPILOT_SCHEDULER_ENABLED=true</code> (inside <code>jobpilot serve</code>, currently
-  <b>{{ "on" if settings.scheduler_enabled else "off" }}</b>) or via the systemd user timer (<code>jobpilot scheduler systemd</code>).</p>
+  <b>{{ "on" if settings.scheduler_enabled else "off" }}</b>) or via the systemd user timer (<code>jobpilot scheduler systemd</code>). Nothing runs while the computer is asleep or
+  off; overdue tasks run on the next pass. When offline, collection records sources as "unavailable" and expires nothing.
+  Scheduled tasks never send email or submit applications.</p>
   <table class="table compact">
-    <thead><tr><th>Task</th><th>Enabled</th><th>Every</th><th>Last success</th><th>Due</th><th></th></tr></thead>
+    <thead><tr><th>Task</th><th>Enabled</th><th>Every</th><th>Last success</th><th>Next run</th><th></th></tr></thead>
     {% for name, last in sched_tasks %}{% set c = sched_cfg.tasks.get(name, {}) %}
-      <tr><td>{{ name }}</td><td>{{ "yes" if c.enabled else "no" }}</td><td>{{ c.every_hours }} h</td><td>{{ last|dt }}</td>
-        <td>{{ "yes" if name in sched_due else "" }}</td>
+      <tr><td>{{ sched_labels.get(name, name) }}<div class="muted small">{{ name }}</div></td><td>{{ "yes" if c.enabled else "no" }}</td><td>{{ c.every_hours }} h</td><td>{{ last|dt }}</td>
+        <td class="small">{% if sched_next[name] %}{{ "due now" if name in sched_due else sched_next[name]|dt }}{% else %}<span class="muted">disabled</span>{% endif %}</td>
         <td><form method="post" action="/system/tasks/{{ name }}" class="inline"><button class="small">run now</button></form></td></tr>
     {% endfor %}
   </table>

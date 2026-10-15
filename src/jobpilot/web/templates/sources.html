@@ -3,41 +3,53 @@
 {% block title %}Sources{% endblock %}
 {% block content %}
 <h1>Job sources</h1>
-<p class="muted">Each source is one company board or a fixed list of career pages. JobPilot only reads public job
-postings from sources you configure; it does not crawl the web and cannot see every job. Check each site's terms
-before adding it. Requests are rate-limited ({{ settings.http_min_interval_seconds }}s/host) and robots.txt is
-{{ "respected" if settings.respect_robots_txt else "NOT checked (disabled in .env)" }}.</p>
+<p class="muted">Each source is one company board or a fixed list of career pages. JobPilot reads only the public postings
+you configure; it doesn't crawl the web and can't see every job. Check each site's terms before adding it. Requests are
+rate-limited ({{ settings.http_min_interval_seconds }}s per host), size-capped, robots.txt is
+{{ "respected" if settings.respect_robots_txt else "NOT checked (disabled in .env)" }}, and private network addresses
+are refused.</p>
+<div class="notice small">A job expires only after its source omits it in consecutive successful runs. Outages, rate
+limits, malformed responses and empty or collapsed listings never expire jobs. <b>Dry run</b> fetches and shows what
+would change without saving anything (it still contacts the site).</div>
 
 <section class="card">
   <div class="actions" style="margin-top:0">
-    <form method="post" action="/sources/run" class="inline"><button class="primary">Run all enabled sources now</button></form>
+    <form method="post" action="/sources/run" class="inline"><button class="primary">Run all enabled sources</button></form>
+    <form method="post" action="/sources/run" class="inline"><input type="hidden" name="dry_run" value="1"><button>Dry run all</button></form>
   </div>
-  {% if sources %}
+  {% if health %}
   <div class="table-wrap"><table class="table">
-    <thead><tr><th>Name</th><th>Type</th><th>Config</th><th>Enabled</th><th>Last run</th><th>Result</th><th></th></tr></thead>
+    <thead><tr><th>Source</th><th>Type</th><th>Enabled</th><th>Last success</th><th>Last attempt</th><th>Jobs (active)</th>
+      <th>New last run</th><th>Problems (last 10 runs)</th><th>Next scheduled</th><th></th></tr></thead>
     <tbody>
-    {% for s in sources %}
+    {% for h in health %}{% set s = h.source %}{% set r = h.last_run %}
       <tr>
-        <td><a href="/jobs?source_id={{ s.id }}&status=">{{ s.name }}</a>{% if s.company_name %}<div class="muted small">{{ s.company_name }}</div>{% endif %}</td>
-        <td>{{ adapters[s.kind].label if s.kind in adapters else s.kind }}</td>
-        <td class="wrap small"><code>{{ s.config|tojson }}</code></td>
+        <td><a href="/sources/{{ s.id }}">{{ s.name }}</a>{% if s.company_name %}<div class="muted small">{{ s.company_name }}</div>{% endif %}</td>
+        <td class="small">{{ adapters[s.kind].label if s.kind in adapters else s.kind }}</td>
         <td>{{ "yes" if s.enabled else "no" }}</td>
-        <td class="nowrap">{{ s.last_run_at|dt }}</td>
-        <td class="wrap small">{% if s.last_status %}{{ badge(s.last_status) }}{% endif %}
-          {% if s.last_stats %}<div class="muted">{% for k, v in s.last_stats.items() if v and k != "errors" %}{{ k }} {{ v }} {% endfor %}</div>{% endif %}
-          {% if s.last_error %}<details><summary>errors</summary><pre>{{ s.last_error }}</pre></details>{% endif %}</td>
+        <td class="nowrap small">{{ s.last_success_at|dt }}</td>
+        <td class="nowrap small">{% if r %}{{ r.started_at|dt }} {{ badge(r.status) }}{% else %}never{% endif %}</td>
+        <td>{{ h.jobs_total }} ({{ h.jobs_active }})</td>
+        <td>{{ r.new if r else "—" }}</td>
+        <td class="small">{% if h.errors_recent %}{{ h.errors_recent }} run(s){% endif %}{% if h.rate_limited_recent %} · {{ h.rate_limited_recent }} rate-limited{% endif %}
+          {% if r and r.error %}<details><summary>last error</summary><pre>{{ r.error }}</pre></details>{% endif %}
+          {% if r and r.warnings %}<div class="notice warn">{{ r.warnings|join("; ") }}</div>{% endif %}</td>
+        <td class="nowrap small">{% if h.next_run %}{{ h.next_run|dt }}<div class="muted">needs a running scheduler</div>{% elif s.kind in adapters %}<span class="muted">not scheduled</span>{% else %}—{% endif %}</td>
         <td class="nowrap">
           {% if s.kind in adapters %}
           <form method="post" action="/sources/run" class="inline"><input type="hidden" name="source_id" value="{{ s.id }}"><button class="small">run</button></form>
+          <form method="post" action="/sources/run" class="inline"><input type="hidden" name="source_id" value="{{ s.id }}"><input type="hidden" name="dry_run" value="1"><button class="small">dry run</button></form>
           <a class="button small" href="/sources?edit={{ s.id }}#form">edit</a>
           {% endif %}
           <form method="post" action="/sources/{{ s.id }}/delete" class="inline" data-confirm="Remove this source? Jobs already collected are kept."><button class="small danger">remove</button></form>
         </td>
       </tr>
+      {% if h.dry_runs %}<tr><td></td><td colspan="9" class="small muted">Latest dry run {{ h.dry_runs[0].started_at|dt }}: {{ badge(h.dry_runs[0].status) }}
+        would add {{ h.dry_runs[0].new }}, update {{ h.dry_runs[0].updated }}, duplicates {{ h.dry_runs[0].duplicates }}, expire {{ h.dry_runs[0].expired }}{% if h.dry_runs[0].error %} — {{ h.dry_runs[0].error[:160] }}{% endif %}</td></tr>{% endif %}
     {% endfor %}
     </tbody>
   </table></div>
-  {% else %}{{ empty("No sources configured yet.") }}{% endif %}
+  {% else %}{{ empty("No sources configured yet. Add one below, or import jobs from a file under Jobs → Add.") }}{% endif %}
 </section>
 
 <section class="card" id="form">

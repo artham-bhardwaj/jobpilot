@@ -101,7 +101,7 @@ def test_ssrf_guard_blocks_private_addresses(settings):
 def test_security_headers_and_escaping(client, db):
     r = client.get("/")
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
-    assert r.headers["x-frame-options"] == "DENY" and r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["x-frame-options"] == "DENY" and r.headers["referrer-policy"] == "same-origin"
     job, _ = job_svc.add_manual(db, job_svc.ManualJobIn(title="<script>alert(1)</script>", company_name="<b>x</b>"))
     db.commit()
     page = client.get(f"/jobs/{job.id}").text

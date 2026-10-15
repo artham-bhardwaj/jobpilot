@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, score %}
+{% block title %}Resume review · {{ job.title }}{% endblock %}
+{% block content %}
+<p><a href="/jobs/{{ job.id }}">← {{ job.title }}</a></p>
+<h1>Resume selection review</h1>
+<p>{{ job.title }} · {{ job.company_name or "?" }} · {{ score(job.relevance_score) }} {{ badge(job.eligibility) }}
+  {% if m.recommendation %}· {{ m.recommendation.label }}{% endif %}
+  {% if selection.category_label %}· role category: <b>{{ selection.category_label }}</b>{% endif %}</p>
+<p class="muted small">Read-only. A job skill counts as covered only when it appears in the resume <b>and</b> your profile
+confirms it. JobPilot never edits or generates resume content to close a gap.</p>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Selected resume</h2>
+  {% if selection.missing %}
+    <div class="notice bad">{{ selection.reason }} <a href="/resumes">Resume library →</a></div>
+  {% else %}
+    <p><b>{{ selection.version.resume.name }} v{{ selection.version.version_no }}</b> ({{ selection.version.resume.category }})
+      · <a href="/resumes/versions/{{ selection.version.id }}/download">download</a>
+      {% if selection.fallback %}{{ badge("fallback", "b-warn") }}{% endif %}{% if selection.unsuitable %} {{ badge("unsuitable", "b-failed") }}{% endif %}</p>
+    <h3>Why</h3><ul class="small">{% for r in selection.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+    <p class="small">Covered required: {% for s in selection.coverage.required %}<span class="tag have">{{ s }}</span>{% else %}<span class="muted">none</span>{% endfor %}<br>
+      Covered preferred: {% for s in selection.coverage.preferred %}<span class="tag have">{{ s }}</span>{% else %}<span class="muted">none</span>{% endfor %}</p>
+  {% endif %}
+  {% if selection.warnings %}<h3>Manual-review warnings</h3>{% for w in selection.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}{% endif %}
+  {% if selection.alternatives %}
+  <h3>Other approved resumes</h3>
+  <table class="table compact small"><thead><tr><th>Resume</th><th>Category</th><th>Verified job skills covered</th></tr></thead>
+    {% for a in selection.alternatives %}<tr><td>{{ a.resume }}</td><td>{{ a.category }}</td><td>{{ a.coverage }}{% if a.skills %}: {{ a.skills|join(", ") }}{% endif %}</td></tr>{% endfor %}</table>
+  <p class="small muted">To use a different version, choose it on the application's page (only approved versions are offered).</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Job requirements vs your verified facts</h2>
+  {% if sk.mandatory or sk.preferred %}
+  <table class="table compact small">
+    <thead><tr><th>Skill</th><th>Job says</th><th>Your profile</th><th>In resume?</th></tr></thead>
+    {% for kind, items in [("required", sk.mandatory or []), ("preferred", sk.preferred or [])] %}{% for s in items %}
+      {% set ev = (sk.job_evidence or {}).get(s, {}) %}{% set mine = skill_profile.get(s) %}
+      <tr><td><b>{{ s }}</b></td>
+        <td>{{ kind }}<div class="muted">{{ ev.where or "" }}{% if ev.snippet %}: “{{ ev.snippet[:80] }}”{% endif %}</div></td>
+        <td>{% if not mine %}{{ badge("missing", "b-failed") }}{% elif mine.status != "confirmed" %}{{ badge(mine.status) }}{% else %}{{ badge("confirmed") }}
+          {% if mine.work %}<div>work: {{ mine.work|join("; ") }}</div>{% endif %}{% if mine.projects %}<div>projects: {{ mine.projects|join("; ") }}</div>{% endif %}
+          {% if not mine.work and not mine.projects %}<div class="muted">no linked role or project</div>{% endif %}{% endif %}</td>
+        <td>{% if selection.version %}{{ "yes" if s in ((selection.version.validation or {}).get("skills_detected") or []) else "no" }}{% else %}—{% endif %}</td></tr>
+    {% endfor %}{% endfor %}
+  </table>
+  {% if sk.mentioned %}<p class="small muted">Mentioned only (not requirements): {{ sk.mentioned|join(", ") }}</p>{% endif %}
+  {% else %}{{ empty("No skills were recognised in this posting — review the description manually.") }}{% endif %}
+  <h3>Relevant confirmed experience</h3>
+  {% set relevant = facts|selectattr("skills")|list %}
+  {% for f in relevant %}<div class="small">{{ f.kind }}: <b>{{ f.label }}</b> — {{ f.skills|join(", ") }}</div>
+  {% else %}<p class="muted small">None of your confirmed roles or projects mention this job's skills.</p>{% endfor %}
+  {% if m.missing_profile_info %}<div class="notice small">Missing from your profile: {{ m.missing_profile_info|join(", ") }}</div>{% endif %}
+</section>
+</div>
+{% endblock %}

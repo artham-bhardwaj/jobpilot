@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, score %}
+{% block title %}Matching calibration{% endblock %}
+{% block content %}
+<h1>Matching calibration</h1>
+<p class="muted">See how each job's relevance score is built, tell JobPilot which matches were useful, and try different
+weights. Your feedback is only recorded and reported here; <b>scoring never changes automatically</b>. Weights change
+only when you save them, and existing scores update only when you re-score.</p>
+
+<form method="get" class="filters card">
+  <label class="field"><span>Sample</span><select name="mode">{% for m in modes %}<option {% if m == mode %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Size</span><input type="number" name="n" min="5" max="100" value="{{ n }}"></label>
+  <label class="field"><span>Random seed</span><input type="number" name="seed" value="{{ seed }}"></label>
+  {% for k in keys %}<label class="field"><span>{{ k|replace("_", " ") }} weight</span><input type="number" step="0.5" min="0" max="100" name="w_{{ k }}" value="{{ proposed[k] }}"></label>{% endfor %}
+  <div class="actions"><button class="primary">Show{% if changed %} / preview{% endif %}</button><a class="button" href="/matching">Reset</a></div>
+  <p class="small muted" style="flex-basis:100%">Change weights above and click Show to <b>preview</b> scores side by side; nothing is saved.</p>
+</form>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Current weights</h2>
+  <table class="table compact">{% for k in keys %}<tr><td>{{ k|replace("_", " ") }}</td><td>{{ weights[k] }}</td><td class="muted">{{ weights_pct[k] }}% of 100</td></tr>{% endfor %}</table>
+  <p class="small muted">Thresholds: relevant ≥ {{ matching.relevance_threshold }}, strong ≥ {{ matching.strong_threshold }},
+    review band from {{ matching.review_band_low }} (Settings → matching).</p>
+  {% if changed %}
+  <form method="post" action="/matching/weights" data-confirm="Save these weights? Existing scores stay unchanged until you re-score.">
+    {% for k in keys %}<input type="hidden" name="w_{{ k }}" value="{{ proposed[k] }}">{% endfor %}
+    <div class="actions"><button class="primary">Save previewed weights</button></div>
+  </form>
+  {% endif %}
+  <form method="post" action="/jobs/rematch" class="actions" data-confirm="Re-score all active jobs with the saved weights and current profile?"><button>Re-score all jobs</button></form>
+</section>
+
+<section class="card">
+  <h2>Your feedback so far</h2>
+  {% if report.total %}
+  <table class="kv small">
+    <tr><th>Judged</th><td>{{ report.total }} job(s): {{ report.useful }} useful, {{ report.irrelevant }} irrelevant</td></tr>
+    <tr><th>Mean score</th><td>useful {{ report.mean_score_useful if report.mean_score_useful is not none else "—" }} · irrelevant {{ report.mean_score_irrelevant if report.mean_score_irrelevant is not none else "—" }}</td></tr>
+    <tr><th>Disagreements</th><td>{{ report.irrelevant_but_scored_relevant|length }} irrelevant job(s) scored ≥ {{ report.threshold }};
+      {{ report.useful_but_scored_below|length }} useful job(s) scored below it</td></tr>
+  </table>
+  {% if not report.enough_data %}<p class="notice warn small">Fewer than 5 judgements in each group — treat comparisons as anecdotal.</p>{% endif %}
+  <table class="table compact small"><thead><tr><th>Component (mean fraction earned)</th><th>useful</th><th>irrelevant</th></tr></thead>
+    {% for k in keys %}<tr><td>{{ k|replace("_", " ") }}</td><td>{{ report.component_means_useful[k] if report.component_means_useful[k] is not none else "—" }}</td><td>{{ report.component_means_irrelevant[k] if report.component_means_irrelevant[k] is not none else "—" }}</td></tr>{% endfor %}
+  </table>
+  <p class="small muted">A component that is high for irrelevant jobs may deserve less weight; this is a hint, not a rule.</p>
+  {% else %}{{ empty("No feedback yet. Mark jobs below as useful or irrelevant.") }}{% endif %}
+</section>
+</div>
+
+<section class="card">
+  <h2>Sample ({{ jobs|length }})</h2>
+  {% if jobs %}
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Job</th><th>Score</th>{% if changed %}<th>Preview</th>{% endif %}
+      {% for k in keys %}<th title="{{ k }}">{{ k.split("_")[0][:5] }}</th>{% endfor %}<th>Eligibility</th><th>Data</th><th>Recommendation</th><th>Your verdict</th></tr></thead>
+    {% for j in jobs %}{% set m = j.match_details or {} %}{% set comps = {} %}
+      {% for c in (m.relevance or {}).get("components", []) %}{% set _ = comps.update({c.key: c}) %}{% endfor %}
+      <tr>
+        <td class="wrap"><a href="/jobs/{{ j.id }}">{{ j.title }}</a><div class="muted small">{{ j.company_name or "?" }}</div></td>
+        <td>{{ score(j.relevance_score) }}</td>
+        {% if changed %}<td>{{ score(previews[j.id].score) }}<div class="small muted">{{ previews[j.id].recommendation }}</div></td>{% endif %}
+        {% for k in keys %}<td class="small" title="{{ comps[k].explanation if k in comps else '' }}">{{ comps[k].points if k in comps else "—" }}</td>{% endfor %}
+        <td>{{ badge(j.eligibility) }}{% if j.hard_conflict %} {{ badge("hard conflict", "b-failed") }}{% endif %}</td>
+        <td>{{ badge(j.confidence or "—", "b-ok" if j.confidence == "high" else ("b-warn" if j.confidence == "medium" else "b-failed")) }}</td>
+        <td class="small">{{ (m.recommendation or {}).get("label", "—") }}</td>
+        <td class="nowrap">{% set fb = feedback.get(j.id) %}{% if fb %}{{ badge(fb.verdict, "b-ok" if fb.verdict == "useful" else "b-rejected") }}{% endif %}
+          {% for v in ["useful", "irrelevant"] %}<form method="post" action="/matching/feedback/{{ j.id }}" class="inline"><input type="hidden" name="verdict" value="{{ v }}"><input type="hidden" name="next" value="/matching?mode={{ mode }}&n={{ n }}&seed={{ seed }}"><button class="small">{{ v }}</button></form>{% endfor %}</td>
+      </tr>
+    {% endfor %}
+  </table></div>
+  <p class="small muted">Column values are points earned per component; hover for the explanation. Open a job for full evidence.</p>
+  {% else %}{{ empty("No scored jobs yet. Collect or import jobs first.") }}{% endif %}
+</section>
+{% endblock %}

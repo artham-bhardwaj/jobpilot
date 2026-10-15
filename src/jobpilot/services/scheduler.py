@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 def _collect(settings: Settings) -> Callable[[Session], dict]:
     from jobpilot.services import jobs as job_svc
 
-    return lambda s: job_svc.collect_all(s, settings)
+    return lambda s: job_svc.collect_all(s, settings, trigger="scheduled")
 
 
 def _followups(settings: Settings) -> Callable[[Session], dict]:
@@ -77,6 +77,14 @@ def _gmail_sync(settings: Settings) -> Callable[[Session], dict]:
     return run
 
 
+TASK_LABELS = {
+    "collect_jobs": "Job collection (enabled sources)",
+    "followup_check": "Follow-up eligibility check (never sends)",
+    "maintenance": "Job expiry check (stated closing dates; no fetching)",
+    "backup": "Database backup",
+    "gmail_sync": "Gmail reply sync (only after you authorise Gmail; read-only)",
+}
+
 TASKS: dict[str, Callable[[Settings], Callable[[Session], dict]]] = {
     "collect_jobs": _collect,
     "followup_check": _followups,
@@ -89,6 +97,21 @@ TASKS: dict[str, Callable[[Settings], Callable[[Session], dict]]] = {
 def last_success(session: Session, name: str):
     return session.scalar(select(TaskRun.started_at).where(TaskRun.task_name == name, TaskRun.status == "success")
                           .order_by(TaskRun.started_at.desc()).limit(1))
+
+
+def next_runs(session: Session) -> dict[str, Any]:
+    """When each enabled task is next due (None = disabled). Runs only happen while a scheduler is running
+    (in-process or systemd timer) and the computer is awake; missed runs happen on the next pass."""
+    cfg = settings_store.get(session, "scheduler")
+    out: dict[str, Any] = {}
+    for name in TASKS:
+        tcfg = cfg.get("tasks", {}).get(name) or {}
+        if not tcfg.get("enabled"):
+            out[name] = None
+            continue
+        last = last_success(session, name)
+        out[name] = (last + timedelta(hours=float(tcfg.get("every_hours", 24)))) if last else utcnow()
+    return out
 
 
 def due_tasks(session: Session) -> list[str]:

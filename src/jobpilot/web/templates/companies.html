@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}Companies{% endblock %}
+{% block content %}
+<h1>Companies</h1>
+<p class="muted">Companies are created from the jobs and contacts you record.</p>
+<section class="card">
+  {% if rows %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Company</th><th>Jobs (active)</th><th>Contacts</th><th>Applications</th><th>Website</th></tr></thead>
+    {% for r in rows %}<tr><td><a href="/companies/{{ r.c.id }}">{{ r.c.name }}</a></td><td>{{ r.jobs }} ({{ r.active }})</td>
+      <td>{{ r.contacts }}</td><td>{{ r.applications }}</td>
+      <td class="small">{% if r.c.website %}<a href="{{ r.c.website }}" target="_blank" rel="noopener noreferrer">{{ r.c.website[:40] }}</a>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+  {% else %}{{ empty("No companies yet.") }}{% endif %}
+</section>
+{% endblock %}

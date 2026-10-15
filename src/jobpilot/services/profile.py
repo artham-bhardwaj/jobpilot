@@ -235,8 +235,10 @@ def suggest_skills_from_text(session: Session, text: str, source: str) -> list[S
 
     Existing skills are left untouched. The candidate must confirm them.
     """
+    from jobpilot.services import skills_taxonomy
     from jobpilot.services.skills_taxonomy import extract_skills
 
+    skills_taxonomy.configure_from_settings(session)
     created = []
     for name in extract_skills(text):
         if session.scalar(select(Skill).where(Skill.normalized_name == name)) is None:
@@ -290,3 +292,26 @@ def completeness(session: Session) -> dict:
         "profile confirmed": p.confirmed_at is not None,
     }
     return {"checks": checks, "score": sum(checks.values()) / len(checks)}
+
+
+def skill_profile(session: Session) -> dict[str, dict]:
+    """Every recorded skill with its status and where it is evidenced in *confirmed* facts.
+
+    ``work`` lists confirmed roles whose title/description mention the skill (internships labelled);
+    ``projects`` lists confirmed personal projects. Nothing is inferred beyond those texts.
+    """
+    from jobpilot.services.skills_taxonomy import extract_skills
+
+    jobs = list(session.scalars(select(Employment).where(Employment.status == "confirmed")))
+    projects = list(session.scalars(select(Project).where(Project.status == "confirmed")))
+    job_skills = {j.id: set(extract_skills(f"{j.title}\n{j.description or ''}")) for j in jobs}
+    proj_skills = {p.id: set(extract_skills(f"{p.name}\n{p.description or ''}\n{', '.join(p.technologies or [])}"))
+                   for p in projects}
+    out: dict[str, dict] = {}
+    for sk in session.scalars(select(Skill)):
+        name = sk.normalized_name
+        work = [f"{j.title} at {j.company}" + (" (internship)" if j.employment_type == "internship" else "")
+                for j in jobs if name in job_skills[j.id]]
+        projs = [p.name for p in projects if name in proj_skills[p.id]]
+        out[name] = {"status": sk.status, "work": work, "projects": projs, "years": sk.years}
+    return out

@@ -13,8 +13,9 @@ def cmd_collect(args) -> int:
 
     settings, _, factory = _ctx()
     ids = [int(x) for x in args.source] if args.source else None
-    run = run_task(settings, factory, "collect_jobs", lambda s: job_svc.collect_all(s, settings, source_ids=ids),
-                   trigger="manual", retries=1)
+    run = run_task(settings, factory, "collect_jobs",
+                   lambda s: job_svc.collect_all(s, settings, source_ids=ids, dry_run=args.dry_run),
+                   trigger="manual", retries=0 if args.dry_run else 1)
     print(json.dumps({"status": run.status, "message": run.message, "details": run.details}, indent=2, default=str))
     return 0 if run.status == "success" else 1
 
@@ -74,7 +75,7 @@ def cmd_assist(args) -> int:
             if app is None:
                 print("Application not found", file=sys.stderr)
                 return 1
-            run = run_assist(s, settings, app, wait_for_user=not args.no_wait)
+            run = run_assist(s, settings, app, wait_for_user=not args.no_wait, approved_host=args.approve_host)
             print(json.dumps({"status": run.status, "message": run.message, "filled": run.filled_fields,
                               "needs_you": run.unknown_fields, "paused": run.pause_reasons}, indent=2))
     except TaskLocked:
@@ -86,6 +87,8 @@ def cmd_assist(args) -> int:
 def register(sub) -> None:
     s = sub.add_parser("collect", help="Collect jobs from enabled sources and score them")
     s.add_argument("--source", nargs="*", help="Only these source ids")
+    s.add_argument("--dry-run", action="store_true",
+                   help="Fetch and show what would change, without saving any jobs (makes real requests)")
     s.set_defaults(func=cmd_collect)
 
     s = sub.add_parser("import-jobs", help="Import jobs from a CSV or JSON file")
@@ -102,6 +105,8 @@ def register(sub) -> None:
     s = sub.add_parser("assist", help="Open a browser to help fill an application (never submits)")
     s.add_argument("application_id", type=int)
     s.add_argument("--no-wait", action="store_true", help="Close the browser right after filling")
+    s.add_argument("--approve-host", required=True,
+                   help="The application page's host name; you approve opening exactly this site")
     s.set_defaults(func=cmd_assist)
 
     from jobpilot import cli_ops

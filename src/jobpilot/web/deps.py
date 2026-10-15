@@ -84,9 +84,14 @@ def render(request: Request, name: str, status_code: int = 200, **ctx: Any):
 
 
 def redirect(url: str, msg: str | None = None, err: str | None = None) -> RedirectResponse:
+    # Only ever redirect within this app (form-supplied "next" values could otherwise point elsewhere).
+    if not url or not url.startswith("/") or url.startswith("//") or "\\" in url or "://" in url.split("?")[0]:
+        url = "/"
     params = {k: v for k, v in (("msg", msg), ("err", err)) if v}
     if params:
-        url = f"{url}{'&' if '?' in url else '?'}{urlencode(params)}"
+        # The query must come before any "#fragment", or the browser never sends it.
+        base, sep, fragment = url.partition("#")
+        url = f"{base}{'&' if '?' in base else '?'}{urlencode(params)}{sep}{fragment}"
     return RedirectResponse(url, status_code=303)
 
 

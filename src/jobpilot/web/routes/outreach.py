@@ -47,7 +47,15 @@ def contact_detail(contact_id: int, request: Request, db: Session = Depends(get_
     c = get_or_404(db, Contact, contact_id)
     drafts = list(db.scalars(select(EmailDraft).where(EmailDraft.contact_id == c.id).order_by(EmailDraft.id.desc())))
     blocked = cs.is_blocked(db, c.email, c.company_id)
-    return render(request, "contact_detail.html", c=c, drafts=drafts, blocked=blocked,
+    linked = cs.jobs_for_contact(db, c)
+    from jobpilot.models import Application
+
+    linked_ids = [j.id for j, _, _ in linked]
+    apps_for = {a.job_id: a for a in db.scalars(select(Application).where(Application.job_id.in_(linked_ids)))} if linked_ids else {}
+    candidates = list(db.scalars(select(Job).where(Job.status == "active", Job.id.not_in(linked_ids) if linked_ids else True)
+                                 .order_by((Job.company_id == c.company_id).desc(), Job.first_seen_at.desc()).limit(100)))
+    return render(request, "contact_detail.html", c=c, drafts=drafts, blocked=blocked, linked=linked,
+                  apps_for=apps_for, link_candidates=candidates,
                   templates=_templates(db), kind_labels=ds.KIND_LABELS)
 
 
@@ -87,6 +95,87 @@ def contact_delete(contact_id: int, db: Session = Depends(get_db)):
     db.delete(c)
     audit.record(db, "contact.deleted", "contact", contact_id)
     return redirect("/contacts", msg="Contact deleted")
+
+
+@router.get("/contacts/duplicates")
+def contact_duplicates(request: Request, db: Session = Depends(get_db)):
+    return render(request, "contact_duplicates.html", pairs=cs.duplicate_candidates(db))
+
+
+@router.post("/contacts/merge")
+async def contact_merge(request: Request, db: Session = Depends(get_db)):
+    form = await form_dict(request)
+    try:
+        keep = get_or_404(db, Contact, int(form.get("keep_id") or 0), "contact")
+        other = get_or_404(db, Contact, int(form.get("other_id") or 0), "contact")
+        if form.get("confirm") != "1":
+            raise ValueError("Tick the confirmation to merge")
+        res = cs.merge_contacts(db, keep, other)
+    except ValueError as exc:
+        return redirect("/contacts/duplicates", err=str(exc))
+    note = f"; {len(res['conflicts'])} conflicting field(s) kept from #{keep.id}" if res["conflicts"] else ""
+    return redirect(f"/contacts/{keep.id}", msg=f"Merged into #{keep.id}{note}")
+
+
+@router.post("/contacts/{contact_id:int}/link-job")
+async def contact_link_job(contact_id: int, request: Request, db: Session = Depends(get_db)):
+    c = get_or_404(db, Contact, contact_id)
+    form = await form_dict(request)
+    try:
+        job = get_or_404(db, Job, int(form.get("job_id") or 0))
+    except ValueError:
+        return redirect(f"/contacts/{contact_id}", err="Choose a job")
+    if form.get("unlink") == "1":
+        cs.unlink_contact_job(db, c, job)
+        return redirect(form.get("next") or f"/contacts/{contact_id}", msg="Association removed")
+    cs.link_contact_job(db, c, job, form.get("relation") or None, source="linked by you")
+    return redirect(form.get("next") or f"/contacts/{contact_id}", msg=f"Linked to {job.title}")
+
+
+@router.get("/companies")
+def companies_page(request: Request, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+
+    from jobpilot.models import Application
+
+    rows = []
+    for co in db.scalars(select(Company).order_by(Company.name)):
+        rows.append({"c": co,
+                     "jobs": db.scalar(select(func.count(Job.id)).where(Job.company_id == co.id)) or 0,
+                     "active": db.scalar(select(func.count(Job.id)).where(Job.company_id == co.id, Job.status == "active")) or 0,
+                     "contacts": db.scalar(select(func.count(Contact.id)).where(Contact.company_id == co.id)) or 0,
+                     "applications": db.scalar(select(func.count(Application.id)).join(Job, Application.job_id == Job.id)
+                                               .where(Job.company_id == co.id)) or 0})
+    return render(request, "companies.html", rows=rows)
+
+
+@router.get("/companies/{company_id:int}")
+def company_detail(company_id: int, request: Request, db: Session = Depends(get_db)):
+    from jobpilot.models import Application
+
+    co = get_or_404(db, Company, company_id)
+    jobs = list(db.scalars(select(Job).where(Job.company_id == co.id).order_by(Job.first_seen_at.desc())))
+    contacts = list(db.scalars(select(Contact).where(Contact.company_id == co.id).order_by(Contact.name)))
+    applications = list(db.scalars(select(Application).join(Job, Application.job_id == Job.id).where(Job.company_id == co.id)))
+    blocked = cs.is_blocked(db, None, co.id)
+    return render(request, "company_detail.html", co=co, jobs=jobs, contacts=contacts, applications=applications,
+                  blocked=blocked)
+
+
+@router.post("/companies/{company_id:int}")
+async def company_save(company_id: int, request: Request, db: Session = Depends(get_db)):
+    from jobpilot.services.text_utils import safe_url
+
+    co = get_or_404(db, Company, company_id)
+    form = await form_dict(request)
+    for f in ("website", "careers_url"):
+        v = form.get(f)
+        if v and not safe_url(v):
+            return redirect(f"/companies/{company_id}", err=f"{f.replace('_', ' ')} must be an http(s) URL")
+        setattr(co, f, safe_url(v) if v else None)
+    co.notes = (form.get("notes") or "")[:5000] or None
+    audit.record(db, "company.updated", "company", co.id)
+    return redirect(f"/companies/{company_id}", msg="Company saved")
 
 
 @router.post("/jobs/{job_id:int}/contacts-from-posting")
@@ -146,7 +235,7 @@ def draft_detail(draft_id: int, request: Request, db: Session = Depends(get_db))
     d = get_or_404(db, EmailDraft, draft_id)
     from jobpilot.integrations import gmail
 
-    return render(request, "draft_detail.html", d=d, problems=ds.approval_problems(db, d) if d.status == "draft" else [],
+    return render(request, "draft_detail.html", d=d, revisions=ds.revisions(db, d), problems=ds.approval_problems(db, d) if d.status == "draft" else [],
                   warnings=ds.recipient_warnings(d), thread=ds.thread(db, d), kind_labels=ds.KIND_LABELS,
                   gmail_ready=gmail.is_ready(request.app.state.settings))
 

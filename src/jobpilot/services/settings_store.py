@@ -25,8 +25,48 @@ DEFAULTS: dict[str, Any] = {
     # Matching thresholds.
     "matching": {
         "relevance_threshold": 55,
+        "strong_threshold": 75,
         "review_band_low": 40,
         "max_missing_mandatory_ratio": 0.5,
+    },
+    # Relative weights of the relevance components (normalised to 100). Change them yourself on the
+    # Matching calibration page; feedback never changes them automatically.
+    "matching_weights": {
+        "required_skills": 30,
+        "preferred_skills": 8,
+        "role_alignment": 25,
+        "experience_level": 12,
+        "education": 5,
+        "location": 12,
+        "preferences": 8,
+    },
+    # Which failed checks count as *hard* conflicts (shown as "not suitable" whatever the relevance score).
+    "hard_rules": {
+        "experience_gap_years": 2.0,
+        "sponsorship_conflict": True,
+        "location_conflict": True,
+        "excluded_title_keywords": True,
+    },
+    # When a job is sent to the review queue.
+    "review_rules": {
+        "strong_match": True,
+        "relevant_but_eligibility_unknown": True,
+        "eligibility_warnings": True,
+        "borderline_relevance": True,
+        "low_confidence_relevant": True,
+        "partial_extraction": True,
+    },
+    # Your additions to the built-in skill dictionary (see Settings). Example:
+    # {"extra": {"quarkus": {"category": "framework", "aliases": ["quarkus"]}}, "disabled": ["agile"]}
+    "skill_dictionary": {"extra": {}, "disabled": []},
+    # Browser assistance: hosted-form types where autofill may run (others open for manual completion).
+    "browser": {"autofill_sites": ["greenhouse", "lever"]},
+    # Job collection safety. A job expires only after this many consecutive successful snapshots of its
+    # source omit it; an empty snapshot or a mass disappearance is treated as a source anomaly instead.
+    "collection": {
+        "expire_after_misses": 2,
+        "anomaly_vanish_ratio": 0.5,
+        "anomaly_min_active": 10,
     },
     # Outreach pacing. There is no bulk sending: every message is approved individually.
     "outreach": {
@@ -94,8 +134,66 @@ class SearchPreferences(BaseModel):
 class MatchingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     relevance_threshold: int = Field(ge=0, le=100)
+    strong_threshold: int = Field(default=75, ge=0, le=100)
     review_band_low: int = Field(ge=0, le=100)
     max_missing_mandatory_ratio: float = Field(ge=0, le=1)
+
+
+WEIGHT_KEYS = ("required_skills", "preferred_skills", "role_alignment", "experience_level", "education",
+               "location", "preferences")
+
+
+class MatchingWeights(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    required_skills: float = Field(ge=0, le=100)
+    preferred_skills: float = Field(ge=0, le=100)
+    role_alignment: float = Field(ge=0, le=100)
+    experience_level: float = Field(ge=0, le=100)
+    education: float = Field(ge=0, le=100)
+    location: float = Field(ge=0, le=100)
+    preferences: float = Field(ge=0, le=100)
+
+
+class HardRules(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    experience_gap_years: float = Field(ge=0, le=20)
+    sponsorship_conflict: bool
+    location_conflict: bool
+    excluded_title_keywords: bool
+
+
+class ReviewRules(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    strong_match: bool = True
+    relevant_but_eligibility_unknown: bool = True
+    eligibility_warnings: bool = True
+    borderline_relevance: bool = True
+    low_confidence_relevant: bool = True
+    partial_extraction: bool = True
+
+
+class SkillSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    category: str | None = Field(default=None, max_length=40)
+    aliases: list[str] = Field(default_factory=list, max_length=30)
+
+
+class SkillDictionary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extra: dict[str, SkillSpec] = Field(default_factory=dict, max_length=500)
+    disabled: list[str] = Field(default_factory=list, max_length=500)
+
+
+class BrowserSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    autofill_sites: list[Literal["greenhouse", "lever"]] = Field(default_factory=list)
+
+
+class CollectionSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expire_after_misses: int = Field(ge=1, le=10)
+    anomaly_vanish_ratio: float = Field(gt=0, le=1)
+    anomaly_min_active: int = Field(ge=1, le=10_000)
 
 
 class OutreachSettings(BaseModel):
@@ -127,7 +225,13 @@ class RoleCategory(BaseModel):
 _VALIDATORS = {
     "search_preferences": SearchPreferences.model_validate,
     "matching": MatchingSettings.model_validate,
+    "matching_weights": MatchingWeights.model_validate,
+    "hard_rules": HardRules.model_validate,
+    "review_rules": ReviewRules.model_validate,
     "outreach": OutreachSettings.model_validate,
+    "collection": CollectionSettings.model_validate,
+    "browser": BrowserSettings.model_validate,
+    "skill_dictionary": SkillDictionary.model_validate,
     "scheduler": SchedulerSettings.model_validate,
     "role_categories": lambda v: {k: RoleCategory.model_validate(c) for k, c in TypeAdapter(dict).validate_python(v).items()},
 }
@@ -140,6 +244,10 @@ def validate(key: str, value: Any) -> None:
     _VALIDATORS[key](value)
     if key == "role_categories" and not value:
         raise ValueError("at least one role category is required")
+    if key == "matching_weights" and sum(float(v) for v in value.values()) <= 0:
+        raise ValueError("at least one weight must be positive")
+    if key == "matching" and value["review_band_low"] > value["relevance_threshold"]:
+        raise ValueError("review_band_low must not exceed relevance_threshold")
 
 
 def get(session: Session, key: str) -> Any:
@@ -167,4 +275,5 @@ def reset(session: Session, key: str) -> None:
     row = session.get(AppSetting, key)
     if row is not None:
         session.delete(row)
+        session.flush()  # so reads in this session immediately see the default again
         audit.record(session, "settings.reset", "app_setting", None, key=key)

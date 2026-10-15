@@ -22,6 +22,71 @@
   </table>
 </section>
 
+<section class="card" id="preparation">
+  <h2>Preparation record {% if app.prepared_at %}<span class="muted small">as of {{ app.prepared_at|dt }}</span>{% endif %}</h2>
+  {% if prep %}
+  <div class="grid-2">
+    <div>
+      <table class="kv small">
+        <tr><th>Job</th><td>{{ prep.job.title }} · {{ prep.job.company or "?" }} · {{ prep.job.location or "location unknown" }} · {{ prep.job.work_mode }}</td></tr>
+        <tr><th>Found via</th><td>{{ prep.job.sources|join(", ") or "—" }}{% if prep.job.first_seen_at %} · first seen {{ prep.job.first_seen_at[:10] }}{% endif %}</td></tr>
+        <tr><th>Apply at</th><td>{% if prep.application_url %}<a href="{{ prep.application_url }}" target="_blank" rel="noopener noreferrer">{{ prep.application_url[:70] }}</a>{% else %}<span class="muted">no application URL — find it on the posting</span>{% endif %}</td></tr>
+        <tr><th>Match</th><td>{{ prep.match.score }} · {{ prep.match.recommendation }} · {{ prep.match.eligibility }} · {{ prep.match.confidence }} confidence</td></tr>
+        <tr><th>Resume</th><td>{{ prep.resume.label or "none selected" }}{% if prep.resume.selected_by %} <span class="muted">({{ prep.resume.selected_by[:120] }})</span>{% endif %}</td></tr>
+        <tr><th>Answers</th><td>{{ prep.answers.approved }}/{{ prep.answers.total }} approved{% if prep.answers.sensitive %} · {{ prep.answers.sensitive }} sensitive{% endif %}</td></tr>
+        <tr><th>Contacts</th><td>{% for c in prep.contacts %}<a href="/contacts/{{ c.id }}">{{ c.name }}</a> ({{ c.role }}, {{ c.email_status or "no email" }}){% if c.do_not_contact %} DNC{% endif %}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none known — JobPilot won't invent one</span>{% endfor %}</td></tr>
+        <tr><th>Drafts</th><td>{% for d in prep.drafts %}<a href="/drafts/{{ d.id }}">#{{ d.id }} {{ d.kind }}</a> ({{ d.status }}){% if not loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td></tr>
+      </table>
+    </div>
+    <div class="small">
+      {% for h in prep.match.hard_conflicts %}<div class="notice bad">Hard conflict: {{ h }}</div>{% endfor %}
+      {% if prep.match.warnings %}<b>Eligibility warnings</b><ul>{% for w in prep.match.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+      {% for w in prep.resume.warnings %}<div class="notice warn">{{ w }}</div>{% endfor %}
+      <b>Verified facts that match</b>: {{ prep.facts.skills_matched|join(", ") or "none" }}
+      {% for e in prep.facts.experience %}<div>{{ e.kind }}: {{ e.label }} — {{ e.skills|join(", ") }}</div>{% endfor %}
+      {% if prep.facts.skills_unverified %}<div>Unverified in your profile: {{ prep.facts.skills_unverified|join(", ") }}</div>{% endif %}
+      {% if prep.facts.skills_missing %}<div>Missing: {{ prep.facts.skills_missing|join(", ") }}</div>{% endif %}
+      {% if prep.missing.profile or prep.missing.job or prep.missing.questions_unanswered %}<div class="notice">Missing information:
+        {% if prep.missing.profile %}profile — {{ prep.missing.profile|join(", ") }}. {% endif %}
+        {% if prep.missing.job %}posting — {{ prep.missing.job|join(", ") }}. {% endif %}
+        {% if prep.missing.questions_unanswered %}{{ prep.missing.questions_unanswered }} question(s) unanswered.{% endif %}</div>{% endif %}
+    </div>
+  </div>
+  {% else %}<p class="muted">No preparation record yet.</p>{% endif %}
+  {% if app.status in ("discovered", "shortlisted", "preparing", "ready_for_review") %}
+  <form method="post" action="/applications/{{ app.id }}/prepare" class="actions"><button>Refresh preparation record</button></form>{% endif %}
+  <p class="small muted">This record never claims the application was filled in or submitted; only recorded evidence does.</p>
+</section>
+
+<section class="card" id="questions">
+  <h2>Application questions</h2>
+  <p class="muted small">Add the questions this application asks (browser assistance adds the ones it couldn't fill).
+  Every answer must be approved by you; sensitive questions must be answered by you, never from the bank.
+  <a href="/answers">Answer bank →</a></p>
+  {% for x in questions %}{% set q = x.q %}
+  <div class="card" style="margin-bottom:8px">
+    <div><b>{{ q.question }}</b> {{ badge(q.status) }}{% if q.sensitive %} {{ badge("sensitive: " ~ (x.sensitive_reason or "answer yourself"), "b-failed") }}{% endif %}
+      <span class="muted small">({{ q.source }}{% if q.answer_source %}, answer from {{ q.answer_source }}{% endif %})</span></div>
+    {% if x.suggestion %}<div class="notice small">Suggested from your answer bank (similarity {{ x.suggestion.similarity }}): “{{ x.suggestion.entry.answer[:200] }}”
+      <form method="post" action="/applications/questions/{{ q.id }}" class="inline"><input type="hidden" name="action" value="use_bank"><input type="hidden" name="entry_id" value="{{ x.suggestion.entry.id }}"><button class="small">use it</button></form></div>{% endif %}
+    <form method="post" action="/applications/questions/{{ q.id }}">
+      <textarea name="answer" rows="2">{{ q.answer or "" }}</textarea>
+      <div class="actions"><button class="small">Save answer</button></div>
+    </form>
+    <form method="post" action="/applications/questions/{{ q.id }}" class="actions">
+      <input type="hidden" name="action" value="approve">
+      {% if q.sensitive %}<label class="checkbox"><input type="checkbox" name="answered_myself" value="1"> I answered this myself, accurately</label>{% endif %}
+      <button class="small primary" {% if not q.answer or q.status == "approved" %}disabled{% endif %}>Approve answer</button>
+    </form>
+    <form method="post" action="/applications/questions/{{ q.id }}" class="inline" data-confirm="Remove this question?"><input type="hidden" name="action" value="delete"><button class="small danger">remove</button></form>
+  </div>
+  {% else %}<p class="muted small">No questions recorded.</p>{% endfor %}
+  <form method="post" action="/applications/{{ app.id }}/questions">
+    <label class="field"><span>Add questions (one per line)</span><textarea name="questions" rows="2"></textarea></label>
+    <div class="actions"><button class="small">Add</button></div>
+  </form>
+</section>
+
 <div class="grid-2">
 <section class="card">
   <h2>Resume</h2>
@@ -59,7 +124,13 @@
   {% if site %}<p class="small">Supported form: <b>{{ site }}</b>. JobPilot fills only confirmed profile fields and attaches the selected resume.
     It pauses on CAPTCHA, login, MFA, consent/legal questions and unknown questions, and <b>never clicks submit</b>.</p>
   {% else %}<p class="small">This site isn't a supported hosted form, so no autofill will happen; the page opens for you. Use the manual workflow below.</p>{% endif %}
-  {% if browser_enabled %}{{ post_button("/applications/" ~ app.id ~ "/assist", "Open in browser" ~ (" & autofill" if site else ""), "primary") }}
+  {% if browser_enabled and host %}
+  <form method="post" action="/applications/{{ app.id }}/assist">
+    <input type="hidden" name="approve_host" value="{{ host }}">
+    <label class="checkbox"><input type="checkbox" name="approve" value="1"> I approve opening <b>{{ host }}</b> for this application{% if site %} and filling my confirmed details{% endif %}</label>
+    <div class="actions"><button class="primary">Open in browser{{ " & autofill" if site else "" }}</button></div>
+  </form>
+  {% elif browser_enabled %}<p class="muted small">No application URL.</p>
   {% else %}<p class="muted small">Disabled. Set <code>JOBPILOT_BROWSER_ENABLED=true</code> in <code>.env</code> and install <code>.[browser]</code>.</p>{% endif %}
   {% if app.browser_runs %}
   <h3>Runs</h3>

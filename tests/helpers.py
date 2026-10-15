@@ -32,6 +32,12 @@ class FakeSession(requests.Session):
             resp.status_code, resp._content = 404, b"not found"
             resp._content_consumed = True
             return resp
+        if isinstance(route, BaseException):
+            raise route  # simulate timeouts / connection errors
+        if isinstance(route, list):  # a sequence of responses for successive calls
+            route = route.pop(0) if len(route) > 1 else route[0]
+            if isinstance(route, BaseException):
+                raise route
         status, body, *rest = route
         resp.status_code = status
         resp._content = body.encode() if isinstance(body, str) else body
@@ -99,3 +105,33 @@ def make_pdf_bytes(text_lines: list[str]) -> bytes:
         out += f"{off:010d} 00000 n \n".encode()
     out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
     return out
+
+
+class LocalPage:
+    """Serve one synthetic HTML page on 127.0.0.1 (for headless-browser tests; no external network)."""
+
+    def __init__(self, html: str):
+        import http.server
+        import threading
+
+        body = html.encode()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_port}/apply"
+        self.host = "127.0.0.1"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()

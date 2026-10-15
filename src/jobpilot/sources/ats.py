@@ -46,6 +46,7 @@ class GreenhouseAdapter:
             company_name=company_name or j.get("company_name"),
             location=loc,
             description_text=html_to_text(content),
+            description_raw=content or None,
             posted_at=parse_dt(j.get("first_published") or j.get("updated_at")),
             source_url=j.get("absolute_url"),
             apply_url=j.get("absolute_url"),
@@ -91,6 +92,9 @@ class LeverAdapter:
             location=cats.get("location") or ", ".join(cats.get("allLocations") or []) or None,
             remote_type=workplace if workplace in ("remote", "hybrid", "onsite") else None,
             description_text="\n".join(x for x in parts if x).strip(),
+            description_raw="\n".join(x for x in [p.get("description") or p.get("descriptionPlain") or ""]
+                                      + [f"<h3>{lst.get('text', '')}</h3>{lst.get('content', '')}" for lst in p.get("lists") or []]
+                                      + [p.get("additional") or p.get("additionalPlain") or ""] if x) or None,
             posted_at=parse_dt(p.get("createdAt")),
             source_url=p.get("hostedUrl"),
             apply_url=p.get("applyUrl") or p.get("hostedUrl"),
@@ -153,6 +157,7 @@ class AshbyAdapter:
                 location=j.get("location"),
                 remote_type=remote,
                 description_text=j.get("descriptionPlain") or html_to_text(j.get("descriptionHtml")),
+                description_raw=j.get("descriptionHtml") or j.get("descriptionPlain"),
                 posted_at=parse_dt(j.get("publishedAt")),
                 source_url=j.get("jobUrl"),
                 apply_url=j.get("applyUrl") or j.get("jobUrl"),

@@ -136,6 +136,11 @@ def save_contact(session: Session, data: ContactIn, contact_id: int | None = Non
         contact.do_not_contact = True
         contact.dnc_reason = contact.dnc_reason or "matches do-not-contact list"
     session.flush()
+    if data.job_id:
+        job = session.get(Job, data.job_id)
+        if job:
+            link_contact_job(session, contact, job, data.role_type,
+                             "address published in the posting" if data.source_type == "job_posting" else "entered for this job")
     audit.record(session, "contact.merged" if merged else ("contact.updated" if contact_id else "contact.created"),
                  "contact", contact.id, source_type=contact.source_type, email_status=contact.email_status)
     return contact, merged
@@ -266,3 +271,116 @@ def search(session: Session, q: str | None = None, role_type: str | None = None,
     if not include_dnc:
         stmt = stmt.where(Contact.do_not_contact.is_(False))
     return list(session.scalars(stmt.limit(500)))
+
+
+# ---- Job associations, duplicates and safe merging ------------------------------------------
+
+def link_contact_job(session: Session, contact: Contact, job: Job, relation: str | None = None,
+                     source: str = "linked by you") -> "ContactJob":
+    """Associate a contact with a job (idempotent). The job's application inherits the association."""
+    from jobpilot.models import ContactJob
+
+    existing = session.scalar(select(ContactJob).where(ContactJob.contact_id == contact.id, ContactJob.job_id == job.id))
+    if existing:
+        return existing
+    link = ContactJob(contact_id=contact.id, job_id=job.id, relation=relation or contact.role_type, source=source[:200])
+    session.add(link)
+    session.flush()
+    audit.record(session, "contact.linked_job", "contact", contact.id, job_id=job.id, source=source[:80])
+    return link
+
+
+def unlink_contact_job(session: Session, contact: Contact, job: Job) -> None:
+    from jobpilot.models import ContactJob
+
+    for link in session.scalars(select(ContactJob).where(ContactJob.contact_id == contact.id, ContactJob.job_id == job.id)):
+        session.delete(link)
+        audit.record(session, "contact.unlinked_job", "contact", contact.id, job_id=job.id)
+
+
+def jobs_for_contact(session: Session, contact: Contact) -> list[tuple[Job, str, str | None]]:
+    """(job, relation, how-established) for every job associated with the contact."""
+    from jobpilot.models import ContactJob
+
+    rows = [(link.job, link.relation, link.source) for link in
+            session.scalars(select(ContactJob).where(ContactJob.contact_id == contact.id).order_by(ContactJob.id))]
+    if contact.job and all(j.id != contact.job_id for j, _, _ in rows):
+        rows.insert(0, (contact.job, contact.role_type, "found on this job"))
+    return rows
+
+
+MERGE_FIELDS = ("name", "title", "company_id", "job_id", "role_type", "email", "email_status", "linkedin_url", "phone",
+                "source_type", "source_url", "source_note", "relationship_note", "verification_note", "notes")
+
+
+def duplicate_candidates(session: Session) -> list[dict]:
+    """Pairs of contacts that may be the same person, with the reasons. Nothing is merged automatically."""
+    contacts = list(session.scalars(select(Contact).order_by(Contact.id)))
+    out, seen = [], set()
+    for i, a in enumerate(contacts):
+        for b in contacts[i + 1:]:
+            reasons = []
+            if a.name and b.name and normalize(a.name) == normalize(b.name):
+                if a.company_id and a.company_id == b.company_id:
+                    reasons.append("same name at the same company")
+                elif not a.company_id or not b.company_id:
+                    reasons.append("same name (one has no company)")
+            if a.email and b.email and a.email.lower() == b.email.lower():
+                reasons.append("same email")
+            if a.linkedin_url and b.linkedin_url and a.linkedin_url.rstrip("/").lower() == b.linkedin_url.rstrip("/").lower():
+                reasons.append("same profile URL")
+            if reasons and (a.id, b.id) not in seen:
+                seen.add((a.id, b.id))
+                out.append({"a": a, "b": b, "reasons": reasons, "conflicts": merge_conflicts(a, b)})
+    return out
+
+
+def merge_conflicts(keep: Contact, other: Contact) -> list[tuple[str, object, object]]:
+    return [(f, getattr(keep, f), getattr(other, f)) for f in MERGE_FIELDS
+            if getattr(keep, f) not in (None, "") and getattr(other, f) not in (None, "")
+            and getattr(keep, f) != getattr(other, f)]
+
+
+def merge_contacts(session: Session, keep: Contact, other: Contact) -> dict:
+    """Merge ``other`` into ``keep``. Safe rules:
+
+    - ``keep``'s values always win; ``other`` only fills empty fields; conflicts are reported, not resolved.
+    - Do-not-contact is never lost: if either is DNC, the result is DNC.
+    - A *verified* email is kept verified only if that email is the one that survives.
+    - History, drafts and job associations move to ``keep``; ``other`` is deleted. Audited.
+    """
+    from jobpilot.models import ContactInteraction, ContactJob, EmailDraft
+
+    if keep.id == other.id:
+        raise ValueError("Choose two different contacts")
+    conflicts = merge_conflicts(keep, other)
+    filled = []
+    for f in MERGE_FIELDS:
+        if getattr(keep, f) in (None, "") and getattr(other, f) not in (None, ""):
+            setattr(keep, f, getattr(other, f))
+            filled.append(f)
+    if "email" in filled:
+        keep.verified_at = other.verified_at
+    if keep.email_status == "verified" and not keep.verification_note:
+        keep.email_status = "unverified"
+    if other.do_not_contact and not keep.do_not_contact:
+        keep.do_not_contact, keep.dnc_reason = True, other.dnc_reason or f"merged from contact #{other.id}"
+    keep.discovered_at = min(keep.discovered_at, other.discovered_at)
+    keep.notes = "\n".join(x for x in (keep.notes, f"[merged contact #{other.id}]") if x)
+    for it in session.scalars(select(ContactInteraction).where(ContactInteraction.contact_id == other.id)):
+        it.contact_id = keep.id
+    for d in session.scalars(select(EmailDraft).where(EmailDraft.contact_id == other.id)):
+        d.contact_id = keep.id
+    keep_jobs = set(session.scalars(select(ContactJob.job_id).where(ContactJob.contact_id == keep.id)))
+    for link in session.scalars(select(ContactJob).where(ContactJob.contact_id == other.id)):
+        if link.job_id in keep_jobs:
+            session.delete(link)
+        else:
+            link.contact_id = keep.id
+    keep.confidence = _confidence(keep)
+    session.flush()
+    session.delete(other)
+    session.flush()
+    audit.record(session, "contact.merged_records", "contact", keep.id, merged_id=other.id, filled=filled,
+                 conflicts=[c[0] for c in conflicts])
+    return {"filled": filled, "conflicts": conflicts}

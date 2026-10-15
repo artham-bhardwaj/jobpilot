@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty %}
+{% block title %}Answer bank{% endblock %}
+{% block content %}
+<h1>Answer bank</h1>
+<p class="muted">Reusable answers you wrote for common application questions. An answer is <b>suggested</b> for an
+application question only if it's approved, matches the question's wording closely and applies to the job's role
+category; you still review and approve it per application. Questions about work authorisation, sponsorship, legal
+declarations, consent, disability, demographics, salary or criminal history are <b>sensitive</b>: they're never
+suggested or filled automatically.</p>
+
+<section class="card">
+  <h2>{{ "Edit answer" if edit else "Add an answer" }}</h2>
+  <form method="post" action="/answers">
+    {% if edit %}<input type="hidden" name="entry_id" value="{{ edit.id }}">{% endif %}
+    <label class="field"><span>Question</span><input type="text" name="question" required value="{{ edit.question if edit else request.query_params.get('q', '') }}"></label>
+    <label class="field"><span>Your answer (only facts you can stand behind)</span><textarea name="answer" rows="4" required>{{ edit.answer if edit else "" }}</textarea></label>
+    <div class="form-grid">
+      <label class="field"><span>Category</span><select name="category">{% for c in categories %}<option {% if edit and edit.category == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
+      <label class="field"><span>Applies to role categories (none = all)</span>
+        <span>{% for k, c in role_categories.items() %}<label class="checkbox"><input type="checkbox" name="role_categories" value="{{ k }}" {% if edit and edit.role_categories and k in edit.role_categories %}checked{% endif %}> {{ c.label }}</label>{% endfor %}</span></label>
+      <label class="checkbox"><input type="checkbox" name="approved" value="1" {% if not edit or edit.approved %}checked{% endif %}> approved for reuse</label>
+    </div>
+    <div class="actions"><button class="primary">Save</button>{% if edit %}<a class="button" href="/answers">Cancel</a>{% endif %}</div>
+  </form>
+</section>
+
+{% if unanswered %}
+<section class="card">
+  <h2>Common questions you haven't answered yet</h2>
+  <p class="muted small">Only answer what you're comfortable reusing.</p>
+  {% for q, cat in unanswered %}<div class="small">{{ q }} <a href="/answers?q={{ q|urlencode }}">answer</a></div>{% endfor %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Saved answers ({{ entries|length }})</h2>
+  {% if entries %}
+  <table class="table">
+    <thead><tr><th>Question</th><th>Answer</th><th>Category</th><th>Status</th><th></th></tr></thead>
+    {% for e in entries %}<tr>
+      <td class="wrap">{{ e.question }}{% if e.role_categories %}<div class="muted small">{{ e.role_categories|join(", ") }}</div>{% endif %}</td>
+      <td class="wrap small">{{ e.answer[:300] }}</td>
+      <td>{{ e.category }}{% if e.sensitive %} {{ badge("sensitive — never auto-used", "b-failed") }}{% endif %}</td>
+      <td>{{ badge("approved" if e.approved else "draft") }}{% if e.last_used_at %}<div class="muted small">used {{ e.last_used_at|d }}</div>{% endif %}</td>
+      <td class="nowrap"><a class="button small" href="/answers?edit={{ e.id }}">edit</a>
+        <form method="post" action="/answers/{{ e.id }}/delete" class="inline" data-confirm="Delete this answer?"><button class="small danger">delete</button></form></td>
+    </tr>{% endfor %}
+  </table>
+  {% else %}{{ empty("No saved answers yet.") }}{% endif %}
+</section>
+{% endblock %}

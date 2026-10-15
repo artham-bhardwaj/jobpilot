@@ -110,6 +110,7 @@ def create(session: Session, job: Job, status: str = "preparing", override_note:
         job.user_status = "shortlisted"
     if status == "preparing":
         _prepare(session, app)
+        prepare_snapshot(session, app)
     audit.record(session, "application.created", "application", app.id, job_id=job.id, status=status)
     return app
 
@@ -138,6 +139,74 @@ def compute_checklist(session: Session, app: Application) -> dict[str, Any]:
         done = auto[key] if is_auto else bool((current.get(key) or {}).get("done"))
         out[key] = {"label": label, "required": required, "auto": is_auto, "done": done}
     return out
+
+
+def prepare_snapshot(session: Session, app: Application) -> dict[str, Any]:
+    """(Re)build the application's preparation record from current verified data and store it.
+
+    References people and facts by id/label only; it does not copy your contact details.
+    """
+    from jobpilot.models import Contact, ContactJob, EmailDraft, Employment, Project
+    from jobpilot.services import answers as answer_svc
+    from jobpilot.services.jobs import canonical_url
+    from jobpilot.services.skills_taxonomy import extract_skills
+
+    job = app.job
+    m = job.match_details or {}
+    rel, elig, sk = m.get("relevance") or {}, m.get("eligibility") or {}, m.get("skills") or {}
+    sel = resume_svc.select_for_job(session, job)
+    version = session.get(ResumeVersion, app.resume_version_id) if app.resume_version_id else None
+    job_skills = set(sk.get("mandatory") or []) | set(sk.get("preferred") or [])
+    experience = []
+    for e in session.scalars(select(Employment).where(Employment.status == "confirmed")):
+        hits = sorted(job_skills & set(extract_skills(f"{e.title}\n{e.description or ''}")))
+        if hits:
+            experience.append({"kind": "work", "label": f"{e.title} at {e.company}", "skills": hits})
+    for pr in session.scalars(select(Project).where(Project.status == "confirmed")):
+        hits = sorted(job_skills & set(extract_skills(f"{pr.name}\n{pr.description or ''}\n{', '.join(pr.technologies or [])}")))
+        if hits:
+            experience.append({"kind": "personal project", "label": pr.name, "skills": hits})
+    contact_ids = set(session.scalars(select(ContactJob.contact_id).where(ContactJob.job_id == job.id)))
+    contacts = [c for c in session.scalars(select(Contact).where(
+        (Contact.id.in_(contact_ids)) | (Contact.job_id == job.id) |
+        ((Contact.company_id == job.company_id) if job.company_id else False)))]
+    qs = answer_svc.questions(session, app)
+    snap = {
+        "generated_at": utcnow().isoformat(timespec="seconds"),
+        "job": {"id": job.id, "title": job.title, "company": job.company_name, "location": job.location,
+                "work_mode": job.remote_type, "employment_type": job.employment_type,
+                "posted_at": job.posted_at.isoformat() if job.posted_at else None,
+                "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
+                "sources": sorted({s.source.name for s in job.sightings if s.source}),
+                "source_url": job.source_url, "status": job.status},
+        "application_url": app.apply_url, "application_url_canonical": canonical_url(app.apply_url),
+        "match": {"score": job.relevance_score, "recommendation": (m.get("recommendation") or {}).get("label"),
+                  "eligibility": job.eligibility, "confidence": job.confidence,
+                  "hard_conflicts": elig.get("hard_conflicts") or [],
+                  "warnings": [f"{c['name']}: {c['explanation']}" for c in elig.get("checks", [])
+                               if c.get("status") in ("warn", "fail", "unknown")],
+                  "components": [{"name": c["name"], "points": c["points"], "max": c["max"],
+                                  "explanation": c["explanation"]} for c in rel.get("components", [])]},
+        "resume": {"version_id": version.id if version else None, "label": version.label if version else None,
+                   "selected_by": app.resume_selection_reason, "suggested_version_id": sel["version"].id if sel["version"] else None,
+                   "warnings": sel["warnings"], "missing": sel["missing"]},
+        "facts": {"skills_matched": sk.get("have") or [], "skills_unverified": sk.get("unverified") or [],
+                  "skills_missing": sk.get("missing_mandatory") or [], "experience": experience},
+        "missing": {"profile": m.get("missing_profile_info") or [], "job": m.get("missing_job_info") or [],
+                    "questions_unanswered": sum(1 for x in qs if x["q"].status != "approved")},
+        "answers": {"total": len(qs), "approved": sum(1 for x in qs if x["q"].status == "approved"),
+                    "sensitive": sum(1 for x in qs if x["q"].sensitive),
+                    "bank_suggestions": sum(1 for x in qs if x["suggestion"])},
+        "contacts": [{"id": c.id, "name": c.display_name, "role": c.role_type, "email_status": c.email_status,
+                      "source": c.source_type, "do_not_contact": c.do_not_contact} for c in contacts],
+        "drafts": [{"id": d.id, "kind": d.kind, "status": d.status} for d in session.scalars(
+            select(EmailDraft).where((EmailDraft.application_id == app.id) | (EmailDraft.job_id == job.id)))],
+        "checklist": compute_checklist(session, app),
+        "review_status": app.status,
+    }
+    app.preparation, app.prepared_at = snap, utcnow()
+    audit.record(session, "application.prepared", "application", app.id)
+    return snap
 
 
 def refresh_checklist(session: Session, app: Application) -> dict[str, Any]:
@@ -182,13 +251,20 @@ def transition(session: Session, app: Application, to: str, note: str | None = N
     if to == "applied":
         raise ApplicationError("Use 'record submission' with confirmation evidence to mark as applied")
     if to == "ready_for_review":
+        from jobpilot.services import answers as answer_svc
+
         items = refresh_checklist(session, app)
         missing = [i["label"] for i in items.values() if i["required"] and not i["done"]]
         if missing:
             raise ApplicationError("Complete the checklist first: " + "; ".join(missing))
+        open_q = answer_svc.unanswered_count(session, app)
+        if open_q:
+            raise ApplicationError(f"{open_q} application question(s) still need an approved answer")
     if to == "preparing":
         _prepare(session, app)
     _event(session, app, to, note)
+    if to in ("preparing", "ready_for_review"):
+        prepare_snapshot(session, app)
     if to == "ready_for_review":
         review.open_item(session, "submission_approval", "application", app.id,
                          f"Approve submission: {app.job.title} at {app.job.company_name or '?'}",

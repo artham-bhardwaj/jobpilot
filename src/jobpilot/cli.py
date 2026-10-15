@@ -79,7 +79,7 @@ def cmd_serve(args) -> int:
     if settings.scheduler_enabled:
         from jobpilot.services.scheduler import start_background_scheduler
 
-        start_background_scheduler(settings, app.state.sessionmaker)
+        app.state.scheduler_thread = start_background_scheduler(settings, app.state.sessionmaker)
     print(f"JobPilot running at http://{settings.host}:{settings.port}", flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
     return 0

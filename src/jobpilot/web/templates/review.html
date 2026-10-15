@@ -2,51 +2,58 @@
 {% from "_macros.html" import badge, empty, score %}
 {% block title %}Review queue{% endblock %}
 {% block content %}
-<h1>Human-review queue</h1>
-<p class="muted">Decisions JobPilot will not make for you.</p>
+<h1>Review queue</h1>
+<p class="muted">Everything waiting for your decision. Bulk actions are limited to safe steps (mark reviewed,
+shortlist, dismiss, acknowledge). Approvals, sending and submission are always done one at a time on the item's own page.</p>
 
-<section class="card">
-  <h2>Action items ({{ q.actions|length }})</h2>
-  {% if q.actions %}
-  <table class="table">
-    {% for i in q.actions %}<tr>
-      <td>{{ badge(i.kind|replace("_", " "), "b-warn") }}</td>
-      <td><a href="/{{ 'applications' if i.entity_type == 'application' else (i.entity_type ~ 's') }}/{{ i.entity_id }}">{{ i.title }}</a><div class="small muted">{{ i.reason or "" }}</div></td>
-      <td class="nowrap small">{{ i.created_at|d }}</td>
-      <td class="nowrap"><form method="post" action="/review/{{ i.id }}" class="inline"><input type="hidden" name="status" value="resolved"><button class="small">resolved</button></form>
-        <form method="post" action="/review/{{ i.id }}" class="inline"><input type="hidden" name="status" value="dismissed"><button class="small">dismiss</button></form></td>
-    </tr>{% endfor %}
-  </table>
-  {% else %}{{ empty("Nothing waiting.") }}{% endif %}
-</section>
-
-<section class="card">
-  <h2>Jobs needing review ({{ q.jobs|length }})</h2>
-  {% if q.jobs %}
-  <table class="table">
-    {% for j in q.jobs %}<tr>
-      <td>{{ score(j.relevance_score) }}</td>
-      <td><a href="/jobs/{{ j.id }}">{{ j.title }}</a> <span class="muted small">{{ j.company_name or "" }}</span>
-        <div class="small">{{ (j.match_details.review_reasons or [])|join("; ") }}</div>
-        {% if j.match_details.missing_info %}<div class="small muted">missing: {{ j.match_details.missing_info|join(", ") }}</div>{% endif %}</td>
-      <td>{{ badge(j.eligibility) }}</td>
-      <td class="nowrap">{% for a, l in [("shortlist","shortlist"),("dismiss","dismiss"),("reviewed","keep")] %}
-        <form method="post" action="/review/job/{{ j.id }}" class="inline"><input type="hidden" name="action" value="{{ a }}"><button class="small">{{ l }}</button></form>{% endfor %}</td>
-    </tr>{% endfor %}
-  </table>
-  {% else %}{{ empty("No jobs flagged.") }}{% endif %}
-</section>
-
-<div class="grid-2">
-<section class="card">
-  <h2>Drafts awaiting approval ({{ q.drafts|length }})</h2>
-  {% for d in q.drafts %}<div><a href="/drafts/{{ d.id }}">{{ d.subject }}</a>{% if d.missing_fields %} {{ badge("missing info", "b-warn") }}{% endif %}</div>
-  {% else %}{{ empty("None.") }}{% endfor %}
-</section>
-<section class="card">
-  <h2>Profile suggestions</h2>
-  {% if q.unverified_skills %}<p>{{ q.unverified_skills }} unverified skill(s) — <a href="/profile#skills">confirm or remove them</a>.</p>
-  {% else %}{{ empty("None.") }}{% endif %}
-</section>
+<div class="actions" style="margin:-4px 0 12px">
+  <a class="button {{ 'primary' if not category }}" href="/review">All ({{ r.counts.values()|sum }})</a>
+  {% for key, (label, prio) in categories.items() if r.counts.get(key) %}
+    <a class="button {{ 'primary' if category == key }}" href="/review?category={{ key }}">{{ label }} ({{ r.counts[key] }})</a>
+  {% endfor %}
 </div>
+
+<form method="get" class="filters card">
+  <input type="hidden" name="category" value="{{ category }}">
+  <label class="field"><span>Search</span><input type="search" name="q" value="{{ q }}" placeholder="title, company, reason"></label>
+  <label class="field"><span>Sort</span><select name="sort">{% for s in ["priority", "newest", "score"] %}<option {% if s == sort %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <div class="actions"><button class="primary">Apply</button></div>
+</form>
+
+{% if r.rows %}
+<form method="post" action="/review/bulk" id="bulkform">
+  <input type="hidden" name="next" value="/review?category={{ category }}&sort={{ sort }}&page={{ r.page }}">
+  <div class="filters">
+    <label class="field"><span>Bulk action for selected items</span><select name="action">
+      {% for a, l in bulk_labels.items() %}<option value="{{ a }}">{{ l }}</option>{% endfor %}</select></label>
+    <div class="actions"><button>Apply to selected</button><span class="muted small">Items that don't allow the action are skipped.</span></div>
+  </div>
+</form>
+<div class="card" style="padding:0"><div class="table-wrap"><table class="table">
+  <thead><tr><th></th><th>What</th><th>Why</th><th>Job / company</th><th>State</th><th>Recommended next action</th><th>Actions</th></tr></thead>
+  {% for i in r.rows %}
+  <tr>
+    <td>{% if i.bulk %}<input type="checkbox" name="keys" value="{{ i.key }}" form="bulkform" aria-label="select">{% endif %}</td>
+    <td class="wrap">{{ badge(i.category_label, "b-warn" if i.priority >= 60 else "b-preparing") }}<div>{% if i.link %}<a href="{{ i.link }}">{{ i.title }}</a>{% else %}{{ i.title }}{% endif %}</div></td>
+    <td class="wrap small">{{ i.why }}</td>
+    <td class="small">{% if i.job_id %}<a href="/jobs/{{ i.job_id }}">{{ i.job_title }}</a><div class="muted">{{ i.company or "" }}</div>{% else %}—{% endif %}</td>
+    <td class="small">{{ i.state }}{% if i.score is not none %}<div>{{ score(i.score) }}</div>{% endif %}</td>
+    <td class="wrap small">{{ i.recommended }}</td>
+    <td class="nowrap">
+      {% for a in i.actions %}
+        {% if a.method == "post" %}<form method="post" action="{{ a.url }}" class="inline">{% for k, v in (a.data or {}).items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button class="small">{{ a.label }}</button></form>
+        {% else %}<a class="button small" href="{{ a.url }}">{{ a.label }}</a>{% endif %}
+      {% endfor %}
+      {% if "acknowledge" in i.bulk %}<form method="post" action="/review/ack" class="inline"><input type="hidden" name="key" value="{{ i.key }}"><button class="small">acknowledge</button></form>{% endif %}
+      {% if i.stored_id is defined and i.category not in ("submission_approval",) %}<form method="post" action="/review/{{ i.stored_id }}" class="inline"><input type="hidden" name="status" value="dismissed"><button class="small">dismiss</button></form>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table></div></div>
+{% if r.pages > 1 %}<div class="actions">
+  {% if r.page > 1 %}<a class="button" href="/review?category={{ category }}&sort={{ sort }}&q={{ q }}&page={{ r.page - 1 }}">← prev</a>{% endif %}
+  <span class="muted">page {{ r.page }} of {{ r.pages }} · {{ r.total }} item(s)</span>
+  {% if r.page < r.pages %}<a class="button" href="/review?category={{ category }}&sort={{ sort }}&q={{ q }}&page={{ r.page + 1 }}">next →</a>{% endif %}
+</div>{% endif %}
+{% else %}{{ empty("Nothing waiting for you here. New jobs appear after sources run or imports.") }}{% endif %}
 {% endblock %}

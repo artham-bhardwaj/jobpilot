@@ -120,7 +120,8 @@ def register(sub) -> None:
     s.set_defaults(func=cmd_gmail)
 
     s = sub.add_parser("export", help="Export data (CSV per entity, or everything as JSON)")
-    s.add_argument("kind", choices=["jobs", "applications", "contacts", "drafts", "interviews", "summary", "all-json"])
+    s.add_argument("kind", choices=["jobs", "applications", "contacts", "drafts", "interviews", "sources", "skill_gaps",
+                                   "summary", "all-json"])
     s.add_argument("--out")
     s.set_defaults(func=cmd_export)
 

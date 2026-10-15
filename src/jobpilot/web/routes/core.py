@@ -45,6 +45,7 @@ def system_page(request: Request, level: str | None = None, db: Session = Depend
         backups=backup.list_backups(settings),
         sched_tasks=[(n, scheduler.last_success(db, n)) for n in scheduler.TASKS],
         sched_due=scheduler.due_tasks(db),
+        sched_next=scheduler.next_runs(db), sched_labels=scheduler.TASK_LABELS,
         sched_cfg=settings_store.get(db, "scheduler"),
     )
 

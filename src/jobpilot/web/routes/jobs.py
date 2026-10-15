@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jobpilot.models import Job, JobSource
+from jobpilot.models import Job, JobSource, SourceRun
 from jobpilot.services import jobs as job_svc
 from jobpilot.services import matching, resumes as rs, settings_store
 from jobpilot.services.tasks import run_task
@@ -112,6 +112,29 @@ def job_detail(job_id: int, request: Request, db: Session = Depends(get_db)):
                   categories=settings_store.get(db, "role_categories"), **extra)
 
 
+@router.get("/jobs/{job_id:int}/resume-review")
+def resume_review(job_id: int, request: Request, db: Session = Depends(get_db)):
+    """Read-only: why a resume was (or wasn't) selected for this job, against your verified facts."""
+    from jobpilot.models import Employment, Project
+    from jobpilot.services import profile as profile_svc
+    from jobpilot.services.skills_taxonomy import extract_skills
+
+    job = get_or_404(db, Job, job_id)
+    m = job.match_details or {}
+    sk = m.get("skills") or {}
+    job_skills = set(sk.get("mandatory") or []) | set(sk.get("preferred") or [])
+    facts = []
+    for e in db.scalars(select(Employment).where(Employment.status == "confirmed")):
+        hits = sorted(job_skills & set(extract_skills(f"{e.title}\n{e.description or ''}")))
+        facts.append({"kind": "work" + (" (internship)" if e.employment_type == "internship" else ""),
+                      "label": f"{e.title} at {e.company}", "skills": hits})
+    for pr in db.scalars(select(Project).where(Project.status == "confirmed")):
+        hits = sorted(job_skills & set(extract_skills(f"{pr.name}\n{pr.description or ''}\n{', '.join(pr.technologies or [])}")))
+        facts.append({"kind": "personal project", "label": pr.name, "skills": hits})
+    return render(request, "resume_review.html", job=job, m=m, sk=sk, selection=rs.select_for_job(db, job),
+                  facts=facts, skill_profile=profile_svc.skill_profile(db))
+
+
 def _job_extras(db: Session, job: Job) -> dict:
     """Related records from later stages (applications, contacts) if available."""
     from jobpilot.services import job_extras
@@ -148,7 +171,7 @@ def job_rematch(job_id: int, db: Session = Depends(get_db)):
 @router.post("/jobs/{job_id:int}/check")
 def job_check(job_id: int, request: Request, db: Session = Depends(get_db)):
     job = get_or_404(db, Job, job_id)
-    result = job_svc.check_alive(db, PoliteHttp(request.app.state.settings), job)
+    result = job_svc.check_alive(db, PoliteHttp(request.app.state.settings), job, initiated_by_user=True)
     return redirect(f"/jobs/{job_id}", msg=f"Checked: {result}")
 
 
@@ -163,9 +186,16 @@ def job_expire(job_id: int, db: Session = Depends(get_db)):
 
 @router.get("/sources")
 def sources_page(request: Request, edit: int | None = None, db: Session = Depends(get_db)):
-    sources = list(db.scalars(select(JobSource).order_by(JobSource.name)))
     editing = db.get(JobSource, edit) if edit else None
-    return render(request, "sources.html", sources=sources, adapters=ADAPTERS, editing=editing)
+    return render(request, "sources.html", health=job_svc.source_health(db), adapters=ADAPTERS, editing=editing)
+
+
+@router.get("/sources/{source_id:int}")
+def source_detail(source_id: int, request: Request, db: Session = Depends(get_db)):
+    src = get_or_404(db, JobSource, source_id)
+    runs = list(db.scalars(select(SourceRun).where(SourceRun.source_id == src.id).order_by(SourceRun.id.desc()).limit(50)))
+    row = next(r for r in job_svc.source_health(db) if r["source"].id == src.id)
+    return render(request, "source_detail.html", src=src, runs=runs, row=row, adapter=ADAPTERS.get(src.kind))
 
 
 @router.post("/sources")
@@ -195,12 +225,16 @@ def source_delete(source_id: int, db: Session = Depends(get_db)):
 @router.post("/sources/run")
 async def sources_run(request: Request, background: BackgroundTasks):
     form = await form_dict(request)
-    ids = [int(form["source_id"])] if form.get("source_id", "").isdigit() else None
+    ids = [int(form["source_id"])] if (form.get("source_id") or "").isdigit() else None
+    dry_run = form.get("dry_run") == "1"
     settings, factory = request.app.state.settings, request.app.state.sessionmaker
 
     def _job():
         run_task(settings, factory, "collect_jobs",
-                 lambda s: job_svc.collect_all(s, settings, source_ids=ids), trigger="manual")
+                 lambda s: job_svc.collect_all(s, settings, source_ids=ids, dry_run=dry_run), trigger="manual")
 
     background.add_task(_job)
-    return redirect("/sources", msg="Collection started in the background — see System → Task runs for results")
+    what = "Dry run" if dry_run else "Collection"
+    back = f"/sources/{ids[0]}" if ids else "/sources"
+    return redirect(back, msg=f"{what} started in the background — refresh to see the result"
+                              + (" (nothing will be saved)" if dry_run else ""))

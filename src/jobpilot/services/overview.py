@@ -12,7 +12,7 @@ from jobpilot.services import applications as apps
 from jobpilot.services import drafts as ds
 from jobpilot.services import interviews as iv_svc
 from jobpilot.services import profile as profile_svc
-from jobpilot.services import review, settings_store
+from jobpilot.services import queue, settings_store
 
 
 def stats(session: Session) -> dict:
@@ -26,7 +26,7 @@ def stats(session: Session) -> dict:
         "shortlisted": session.scalar(active.where(Job.user_status == "shortlisted")) or 0,
         "applications": apps.counts(session),
         "upcoming": iv_svc.upcoming(session, limit=5),
-        "review_count": review.open_count(session),
+        "review_count": queue.count(session),
         "followups_due": len(ds.due_followups(session)),
         "threshold": threshold,
         "top_jobs": list(session.scalars(select(Job).where(Job.status == "active", Job.user_status == "new",
@@ -37,6 +37,16 @@ def stats(session: Session) -> dict:
     }
     out["submitted"] = sum(v for k, v in out["applications"].items() if k in apps.SUBMITTED_STATES)
     out["in_progress"] = sum(v for k, v in out["applications"].items() if k in apps.OPEN_STATES)
+    strong = session.scalar(active.where(Job.relevance_score >= settings_store.get(session, "matching").get("strong_threshold", 75),
+                                         Job.hard_conflict.is_(False))) or 0
+    out["funnel"] = [
+        ("Active jobs", out["jobs_active"], "/jobs"),
+        ("Relevant", out["jobs_relevant"], f"/jobs?min_score={threshold}"),
+        ("Strong (no hard conflict)", strong, "/review?category=strong_match"),
+        ("Shortlisted", out["shortlisted"], "/jobs?user_status=shortlisted"),
+        ("Preparing / ready", out["in_progress"], "/applications"),
+        ("Applied (with evidence)", out["submitted"], "/applications"),
+    ]
     approved_resumes = session.scalar(select(func.count(func.distinct(ResumeVersion.resume_id)))
                                       .where(ResumeVersion.status == "approved")) or 0
     p = profile_svc.get_profile(session)

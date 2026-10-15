@@ -128,7 +128,69 @@ def summary(session: Session) -> dict[str, Any]:
                 "verified_contacts": session.scalar(select(func.count(Contact.id)).where(Contact.email_status == "verified")) or 0}
     return {"jobs": jobs, "applications": applications, "interviews": interviews, "outreach": outreach,
             "sources": source_effectiveness(session, threshold, reached),
-            "resumes": resume_performance(session, reached), "min_sample": MIN_SAMPLE, "threshold": threshold}
+            "resumes": resume_performance(session, reached), "min_sample": MIN_SAMPLE, "threshold": threshold,
+            "collection": collection_report(session), "review": review_report(session),
+            "resume_selection": resume_selection_report(session, threshold), "skill_gaps": skill_gap_report(session)}
+
+
+def collection_report(session: Session) -> list[dict]:
+    """Per source: runs, fetched, new vs duplicate postings, problems (dry runs excluded)."""
+    from jobpilot.models import SourceRun
+
+    rows = []
+    for src in session.scalars(select(JobSource).order_by(JobSource.name)):
+        runs = list(session.scalars(select(SourceRun).where(SourceRun.source_id == src.id, SourceRun.dry_run.is_(False))))
+        rows.append({"source": src.name, "kind": src.kind, "runs": len(runs),
+                     "fetched": sum(r.fetched for r in runs), "new": sum(r.new + r.reposts for r in runs),
+                     "duplicates": sum(r.duplicates for r in runs), "expired": sum(r.expired for r in runs),
+                     "problem_runs": sum(1 for r in runs if r.status in ("failed", "unavailable", "anomaly", "partial")),
+                     "rate_limited": sum(r.rate_limited for r in runs),
+                     "duplicate_share": Rate(sum(r.duplicates for r in runs),
+                                             sum(r.new + r.reposts + r.duplicates for r in runs)).as_dict()})
+    return rows
+
+
+def review_report(session: Session) -> dict[str, int]:
+    from jobpilot.services import queue
+
+    counts: dict[str, int] = {}
+    for item in queue.build(session):
+        counts[item["category_label"]] = counts.get(item["category_label"], 0) + 1
+    return counts
+
+
+def resume_selection_report(session: Session, threshold: float, limit: int = 300) -> dict[str, Any]:
+    """Which resume would be selected for relevant active jobs, by the jobs' role category."""
+    from jobpilot.services.resumes import select_for_job
+
+    jobs = list(session.scalars(select(Job).where(Job.status == "active", Job.relevance_score >= threshold,
+                                                  Job.hard_conflict.is_(False)).limit(limit)))
+    by_cat: dict[str, dict[str, Any]] = {}
+    for job in jobs:
+        sel = select_for_job(session, job)
+        row = by_cat.setdefault(job.category or "unclassified", {"jobs": 0, "exact": 0, "fallback": 0, "missing": 0,
+                                                                 "unsuitable": 0, "resumes": {}})
+        row["jobs"] += 1
+        if sel["missing"]:
+            row["missing"] += 1
+            continue
+        row["fallback" if sel["fallback"] else "exact"] += 1
+        row["unsuitable"] += int(sel["unsuitable"])
+        label = sel["version"].label
+        row["resumes"][label] = row["resumes"].get(label, 0) + 1
+    by_resume_category: dict[str, int] = defaultdict(int)
+    for a in session.scalars(select(Application).where(Application.resume_version_id.is_not(None))):
+        by_resume_category[a.resume_version.resume.category] += 1
+    return {"jobs_considered": len(jobs), "by_category": by_cat, "applications_by_resume_category": dict(by_resume_category)}
+
+
+def skill_gap_report(session: Session, top: int = 10) -> dict[str, Any]:
+    from jobpilot.services import skill_gaps
+
+    r = skill_gaps.analyze(session, scope="relevant")
+    return {"jobs_analyzed": r["jobs_analyzed"],
+            "top": [{"skill": g["skill"], "status": g["status"], "required_in": g["mandatory"], "preferred_in": g["preferred"],
+                     "share": g["share"]} for g in r["gaps"][:top]]}
 
 
 def source_effectiveness(session: Session, threshold: float, reached: dict[int, set[str]]) -> list[dict]:
@@ -212,6 +274,14 @@ def export_csv(session: Session, kind: str) -> str:
                     ((i.id, i.application_id, i.application.job.title, i.application.job.company_name,
                       i.round_name or i.round_no, i.stage, i.scheduled_at, i.timezone, i.format, i.status, i.outcome)
                      for i in session.scalars(select(Interview).order_by(Interview.id))))
+    if kind == "sources":
+        return _csv(["source", "kind", "runs", "fetched", "new", "duplicates", "expired", "problem_runs", "rate_limited"],
+                    ((r["source"], r["kind"], r["runs"], r["fetched"], r["new"], r["duplicates"], r["expired"],
+                      r["problem_runs"], r["rate_limited"]) for r in collection_report(session)))
+    if kind == "skill_gaps":
+        rep = skill_gap_report(session, top=100)
+        return _csv(["skill", "your_status", "required_in_jobs", "preferred_in_jobs", "share_of_jobs"],
+                    ((g["skill"], g["status"], g["required_in"], g["preferred_in"], g["share"]) for g in rep["top"]))
     if kind == "summary":
         s = summary(session)
         rows = []
@@ -228,4 +298,4 @@ def export_csv(session: Session, kind: str) -> str:
     raise ValueError(f"Unknown export {kind!r}")
 
 
-EXPORT_KINDS = ("jobs", "applications", "contacts", "drafts", "interviews", "summary")
+EXPORT_KINDS = ("jobs", "applications", "contacts", "drafts", "interviews", "sources", "skill_gaps", "summary")

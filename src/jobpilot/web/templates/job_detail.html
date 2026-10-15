@@ -67,7 +67,7 @@
   <h2>Skills</h2>
   {% if m.skills %}{% set sk = m.skills %}
     {% macro skill_tag(s) %}<span class="tag {{ 'have' if s in sk.have else ('learn' if s in (sk.learning or []) or s in (sk.unverified or []) else 'miss') }}"
-      title="{{ (sk.candidate or {}).get(s, '') }}{% if sk.job_evidence and s in sk.job_evidence %} — {{ sk.job_evidence[s].where }}{% endif %}">{{ s }}{% if s in (sk.unverified or []) %} (unverified){% endif %}</span>{% endmacro %}
+      title="{{ (sk.candidate or {}).get(s, '') }}{% if sk.job_evidence and s in sk.job_evidence %} — {{ sk.job_evidence[s].where }}{% if sk.job_evidence[s].qualifier %} ({{ sk.job_evidence[s].qualifier }}){% endif %}{% endif %}">{{ s }}{% if s in (sk.unverified or []) %} (unverified){% endif %}</span>{% endmacro %}
     <p><b>Required:</b> {% for s in sk.mandatory %}{{ skill_tag(s) }}{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
     <p><b>Preferred:</b> {% for s in sk.preferred %}{{ skill_tag(s) }}{% else %}<span class="muted">none recognised</span>{% endfor %}</p>
     {% if sk.mentioned %}<p class="small"><b>Mentioned only</b> (not treated as requirements): {% for s in sk.mentioned %}<span class="tag">{{ s }}</span>{% endfor %}</p>{% endif %}

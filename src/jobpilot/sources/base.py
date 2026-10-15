@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from jobpilot.sources.http import PoliteHttp
@@ -75,3 +76,34 @@ def parse_dt(value: Any) -> datetime | None:
         return dt
     except (ValueError, OSError, OverflowError):
         return None
+
+
+_ISO_DEADLINE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$")
+
+
+def parse_deadline(value: Any, posted_at: datetime | None = None) -> tuple[datetime | None, str | None]:
+    """Strictly parse a source-supplied application deadline. Returns ``(deadline, problem)``.
+
+    Only ISO dates (``2026-11-30``) and ISO date-times are accepted; anything else is ignored, never guessed.
+    A date without a time means the end of that day. Implausible values (outside 2000-2100, or more than a day
+    before the posting date) are ignored too, so a bad value can never expire a job.
+    """
+    if value in (None, ""):
+        return None, None
+    s = str(value).strip()
+    if not isinstance(value, str) or not _ISO_DEADLINE.match(s):
+        return None, f"not an ISO date: {s[:40]!r}"
+    try:
+        if len(s) == 10:
+            dt = datetime.fromisoformat(s).replace(hour=23, minute=59, second=59)
+        else:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo:
+                dt = dt.astimezone(UTC).replace(tzinfo=None)
+    except ValueError:
+        return None, f"invalid date: {s[:40]!r}"
+    if not 2000 <= dt.year <= 2100:
+        return None, f"implausible year: {s[:40]!r}"
+    if posted_at is not None and dt < posted_at - timedelta(days=1):
+        return None, f"before the posting date: {s[:40]!r}"
+    return dt, None

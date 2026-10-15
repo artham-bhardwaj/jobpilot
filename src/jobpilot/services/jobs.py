@@ -41,8 +41,10 @@ def fingerprint(company: str | None, title: str, location: str | None) -> str:
 
 
 def content_hash(job: JobData) -> str:
-    return sha256("|".join(str(x or "") for x in (job.title, job.location, job.description_text,
-                                                    job.salary_min, job.salary_max)))
+    parts = [job.title, job.location, job.description_text, job.salary_min, job.salary_max]
+    if job.valid_through:  # only when stated, so hashes of jobs without a deadline don't change
+        parts.append(job.valid_through.isoformat())
+    return sha256("|".join(str(x or "") for x in parts))
 
 
 def get_or_create_company(session: Session, name: str | None) -> Company | None:
@@ -72,6 +74,7 @@ def structured_fields(data: JobData) -> dict[str, Any]:
         "remote_type": data.remote_type, "employment_type": data.employment_type,
         "salary_min": data.salary_min, "salary_max": data.salary_max, "salary_currency": data.salary_currency,
         "valid_through": data.valid_through.isoformat() if data.valid_through else None,
+        "deadline_source": (data.raw or {}).get("deadline_source") if data.valid_through else None,
         "location": data.location, "posted_at": data.posted_at.isoformat() if data.posted_at else None,
     }.items() if v not in (None, "")}
 
@@ -287,17 +290,23 @@ def mark_expired(session: Session, job: Job, reason: str, actor: str = "user") -
         audit.record(session, "job.expired", "job", job.id, actor=actor, reason=reason)
 
 
+DEADLINE_GRACE = timedelta(hours=14)
+
+
 def expire_past_deadline(session: Session) -> int:
     """Expire jobs whose *stated* closing date has passed: the source's structured ``validThrough``, or an
     explicit deadline sentence in the posting ("Applications close on 30 November 2026"). Nothing is fetched."""
-    from datetime import date
+    from datetime import date, time
 
     now = utcnow()
-    today = now.date()
+    # A deadline's time zone is rarely stated: only act once it has passed everywhere (UTC-12 … UTC+14).
+    cutoff = now - DEADLINE_GRACE
     n = 0
     for job in session.scalars(select(Job).where(Job.status == "active", Job.valid_through.is_not(None),
-                                                 Job.valid_through < now)):
-        mark_expired(session, job, reason="past its stated closing date (validThrough)", actor="system")
+                                                 Job.valid_through < cutoff)):
+        source = (job.raw or {}).get("deadline_source") or "validThrough"
+        mark_expired(session, job, reason=f"past its stated closing date {job.valid_through:%Y-%m-%d} ({source})",
+                     actor="system")
         n += 1
     for job in session.scalars(select(Job).where(Job.status == "active", Job.valid_through.is_(None),
                                                  Job.match_details.is_not(None))):
@@ -307,7 +316,7 @@ def expire_past_deadline(session: Session) -> int:
                 deadline = date.fromisoformat(ev["value"])
             except ValueError:
                 continue
-            if deadline < today:
+            if datetime.combine(deadline, time(23, 59, 59)) < cutoff:
                 mark_expired(session, job, reason=f"stated application deadline {deadline} passed (“{ev.get('snippet')}”)",
                              actor="system")
                 n += 1

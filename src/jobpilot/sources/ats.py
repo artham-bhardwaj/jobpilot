@@ -15,7 +15,7 @@ import html
 import re
 
 from jobpilot.services.text_utils import html_to_text
-from jobpilot.sources.base import FetchResult, JobData, parse_dt
+from jobpilot.sources.base import FetchResult, JobData, parse_deadline, parse_dt
 from jobpilot.sources.http import PoliteHttp
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
@@ -41,18 +41,28 @@ class GreenhouseAdapter:
         content = html.unescape(j.get("content") or "")
         loc = (j.get("location") or {}).get("name")
         depts = ", ".join(d.get("name", "") for d in j.get("departments") or [] if d.get("name"))
+        posted = parse_dt(j.get("first_published") or j.get("updated_at"))
+        raw = {"id": j.get("id"), "updated_at": j.get("updated_at"), "requisition_id": j.get("requisition_id")}
+        deadline, problem = parse_deadline(j.get("application_deadline"), posted)
+        if j.get("application_deadline") not in (None, ""):
+            raw["application_deadline"] = str(j.get("application_deadline"))[:64]  # as received
+            if deadline:
+                raw["deadline_source"] = "Greenhouse application_deadline"
+            else:
+                raw["deadline_ignored"] = problem
         return JobData(
             title=j.get("title") or "",
             company_name=company_name or j.get("company_name"),
             location=loc,
             description_text=html_to_text(content),
             description_raw=content or None,
-            posted_at=parse_dt(j.get("first_published") or j.get("updated_at")),
+            posted_at=posted,
+            valid_through=deadline,
             source_url=j.get("absolute_url"),
             apply_url=j.get("absolute_url"),
             external_id=str(j.get("id")) if j.get("id") is not None else None,
             department=depts or None,
-            raw={"id": j.get("id"), "updated_at": j.get("updated_at"), "requisition_id": j.get("requisition_id")},
+            raw=raw,
         )
 
     def fetch(self, http: PoliteHttp, config: dict, company_name: str | None) -> FetchResult:

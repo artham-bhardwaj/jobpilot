@@ -162,7 +162,8 @@ def _structured_from_job(job: Job) -> dict[str, Any]:
     keys = set((job.raw or {}).get("_structured") or [])
     values = {"remote_type": job.remote_type, "employment_type": job.employment_type, "salary_min": job.salary_min,
               "salary_max": job.salary_max, "salary_currency": job.salary_currency,
-              "valid_through": job.valid_through.isoformat() if job.valid_through else None, "location": job.location}
+              "valid_through": job.valid_through.isoformat() if job.valid_through else None, "location": job.location,
+              "deadline_source": (job.raw or {}).get("deadline_source") if job.valid_through else None}
     return {k: v for k, v in values.items() if k in keys and v not in (None, "")}
 
 

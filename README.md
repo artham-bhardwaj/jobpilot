@@ -103,7 +103,7 @@ jobpilot --debug <command>                # show a full traceback if something f
 ## Tests
 
 ```bash
-.venv/bin/pytest            # 310 tests, offline (fake HTTP, fake DNS), synthetic fixtures only
+.venv/bin/pytest            # 357 tests, offline (fake HTTP, fake DNS), synthetic fixtures only
 ```
 
 A few tests drive your local Chrome headlessly (PDF rendering, form-fill safety); they are skipped

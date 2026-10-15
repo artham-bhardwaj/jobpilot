@@ -1,8 +1,8 @@
 # JobPilot — implementation status
 
-**Source of truth for what is verified.** Last updated: 2026-10-16, after Milestone 10's offline phases and the first live Greenhouse test (310 tests passing).
-Commits: `19f3d19` baseline, `04b70f3` Milestone 8, `cb9b23f` Milestone 9, then the Milestone 10 offline phases
-("Complete milestone 10 reliability validation").
+**Source of truth for what is verified.** Last updated: 2026-10-16, after the requirement-qualifier and deadline parsing work (357 tests passing).
+Commits: `19f3d19` baseline, `04b70f3` Milestone 8, `cb9b23f` Milestone 9, `83f3061` Milestone 10 offline phases,
+`c57890d` live-Greenhouse fixes, then "Improve job requirement and deadline parsing".
 `docs/CHECKLIST.md` is superseded by this file.
 
 Legend: **Verified** = exercised by automated tests and/or the live local checks below.
@@ -222,14 +222,84 @@ can prove no form submission happened.
    - The bare word **"Go"** was never recognised: the alias list lacked "go", so Go was found in 0 of the Go-titled
      roles. Now 28 postings require Go, and the verb "go" is still ignored.
 
-**Remaining parsing discrepancies (not fixed; recorded for calibration):**
-- "Rails, or comparable depth … such as Django or Ecto" makes Django "required"; examples of alternatives aren't
-  recognised.
-- "Interest or experience in AI/ML" is classed as required.
+**Parsing discrepancies found here:** examples ("such as Django"), interest ("interest in AI/ML") and Greenhouse's
+`application_deadline` were fixed afterwards; see "Requirement qualifiers and deadlines" below. Still open:
 - "concurrency" maps to `multithreading`.
 - Only 22 of 215 postings state years of experience; the rest are correctly "unknown", not guessed.
 - 16 postings with office-only locations (e.g. "Bangalore, India") have work mode "unknown", not guessed as remote.
-- Greenhouse's `application_deadline` field is not read by the adapter; none of the 215 postings set it.
+
+### Requirement qualifiers and deadlines (2026-10-16; offline)
+
+**Skills.** Each skill in a posting keeps its `kind` (required / preferred / mentioned), which is what matching and
+hard-conflict logic use, unchanged. It now also carries a `qualifier`, shown in the job page's skill tooltip:
+
+| Qualifier | Trigger | Kind |
+|---|---|---|
+| `requirement` | requirement section or wording; an explicit "must"/"required" wins over softer words ("Familiarity with Git is required") | required |
+| `example` | after "such as", "e.g.", "for example", "for instance", up to `)`, `;`, ", and" or the sentence end | never required: preferred in a requirement context, otherwise as the sentence |
+| `interest` | "interest (or experience) in", "passion for", "curiosity about", "willing/eager/keen to learn" | preferred |
+| `familiarity`, `exposure`, `preference` | "familiarity", "exposure to", "preferred / nice to have" ("preferred but not required" is not a must) | preferred |
+| `mention` | company/stack/benefits text, passing mentions | mentioned |
+
+- The sentence splitter no longer splits after "e.g.", "i.e.", "etc.", "eg." and "vs.".
+- A skill keeps its strongest real ask wherever it appears: required beats example, preference and mention, in
+  either order. The evidence quotes the requiring sentence.
+- Skills outside an example or interest span keep the sentence's classification: "Rails … such as Django" →
+  Rails required, Django example.
+
+**Effect on the 215 real GitLab postings.** The previous and new parsers were compared on the saved import, offline
+with no new requests:
+- **58 skill mentions in 32 postings changed from required to preferred** (as example or interest). Nothing else
+  changed: no skill was added, removed or promoted. Required mentions went from 482 to 424.
+- Django in the Rails posting → example. AI/ML in the security posting → interest. Python there → example
+  ("scripting languages such as Python").
+
+**Deadlines.**
+- `parse_deadline()` accepts only ISO dates and ISO date-times. A date means the end of that day; an offset or `Z`
+  is converted to UTC.
+- Anything else is ignored, never guessed, and the reason is kept: free text, `30/11/2026`, `Nov 30, 2026`,
+  `2026-11`, impossible dates, years outside 2000–2100, epoch numbers, and deadlines more than a day before the
+  posting date.
+- Greenhouse `application_deadline`: the original value is kept in `raw`, with either
+  `deadline_source: "Greenhouse application_deadline"` or `deadline_ignored: <reason>`. The parser's deadline
+  evidence says `structured` / "source data (Greenhouse application_deadline)".
+- JSON-LD `validThrough` uses the same strict parser ("schema.org validThrough").
+- A deadline that's added or changed later updates the job. Jobs without a deadline keep their exact previous
+  content hash, so the change causes no spurious "updated" runs.
+- **Expiry:** a stated deadline (structured or an explicit "apply by" sentence) expires a job only once it has passed
+  in every time zone (14-hour grace). Vague, invalid or missing deadlines can't expire anything; the existing
+  "closing in January" test still passes.
+  - Boundaries are tested with a frozen clock. "2030-11-30" or "Apply by 30 November 2030": still active at
+    2030-12-01 13:59:59 UTC, expired at 14:00:00. "2030-11-30T23:00+05:30": active at 07:30:00 UTC, expired at 07:30:01.
+  - A deadline the source removes is cleared, and the job's hash returns to its pre-deadline value.
+  - Jobs already stored **with** a `validThrough` will be reported "updated" once on their next run, because the
+    hash now includes the deadline and a date-only value now means the end of that day. Your real database has no
+    jobs, so this is a one-time effect on future data only.
+- **Not verified live:** all 215 GitLab postings had `application_deadline: null`, so the Greenhouse value format
+  is verified against synthetic data only.
+
+**Tests:** `tests/test_m10_parsing.py`, 47 cases. They include:
+- positive and negative cases for every qualifier;
+- the same skill in required and mentioned/example contexts, in both orders;
+- a hard conflict that still wins with example wording;
+- valid, invalid, vague, missing, past and future deadlines, plus exact expiry boundaries.
+
+On `c57890d` the example, interest and deadline cases fail. The plain-requirement cases fail there only because the
+`qualifier` field didn't exist. The cases that guard existing behaviour (required beats mention, mention-only) pass on both.
+
+**Remaining parsing gaps:**
+- An example span runs to `)`, `;`, ", and" or the sentence end, so "such as Django and 3+ years of Java" (no comma)
+  marks Java as an example too.
+- "like X" and "including X" are not treated as examples.
+- Interest cues are a fixed list.
+- Text deadlines are recognised only with a full date ("Apply by 30 November 2026"); numeric day/month dates are
+  ignored as ambiguous.
+- Lever and Ashby deadline fields are not read.
+- One sentence that mixes a must and a preference ("Kafka is a plus but Java is a must") is routed to the preferred
+  section, so Java becomes preferred. This predates the change.
+- A short line with "required" can be taken as a heading, e.g. "We use Kafka. Java is required." makes Kafka
+  required. This also predates the change.
+- The `familiarity` / `exposure` qualifier is chosen per sentence, not per skill.
 
 **Matching calibration: not possible yet.** Your profile has no confirmed skills or experience, so these scores
 reflect an empty profile. No weights or profile facts were changed.
@@ -409,7 +479,7 @@ has contacted a real external service.
 
 ## 4. Failed tests and open defects
 
-- **Failed tests: none** (310/310 after the live Greenhouse test fixes, run with the network removed).
+- **Failed tests: none** (357/357 after the requirement-qualifier and deadline work, run with the network removed).
 - **Open defects: none known.** Milestone 9's three and Milestone 10's four defects (two offline, two found on the live board) are fixed with regression tests. All of D1–D8 and S1–S3/S5 from the audit are fixed with regression tests.
   S4 (no auth) and S6 (unencrypted backups) are accepted limitations (§3).
 - One non-editable `pip install .` attempt failed during verification and could not be reproduced in three

@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 
 from jobpilot.services.text_utils import clean_ws, html_to_text
 from jobpilot.sources.ats import GreenhouseAdapter, LeverAdapter
-from jobpilot.sources.base import FetchResult, JobData, parse_dt
+from jobpilot.sources.base import FetchResult, JobData, parse_deadline, parse_dt
 from jobpilot.sources.http import PoliteHttp, is_temporary
 
 MAX_PAGES_PER_SOURCE = 50
@@ -87,6 +87,7 @@ def posting_to_job(posting: dict, page_url: str, company_name: str | None = None
     ident = posting.get("identifier")
     ext = ident.get("value") if isinstance(ident, dict) else (str(ident) if ident else None)
     emp = posting.get("employmentType")
+    deadline, _ = parse_deadline(posting.get("validThrough"), parse_dt(posting.get("datePosted")))
     return JobData(
         title=clean_ws(posting.get("title") or ""),
         company_name=company_name or org_name,
@@ -95,13 +96,13 @@ def posting_to_job(posting: dict, page_url: str, company_name: str | None = None
         description_text=html_to_text(posting.get("description") or ""),
         description_raw=posting.get("description") or None,
         posted_at=parse_dt(posting.get("datePosted")),
-        valid_through=parse_dt(posting.get("validThrough")),
+        valid_through=deadline,
         source_url=page_url,
         apply_url=posting.get("url") or page_url,
         external_id=str(ext) if ext else None,
         employment_type=", ".join(emp) if isinstance(emp, list) else emp,
         salary_min=smin, salary_max=smax, salary_currency=cur, salary_period=period,
-        raw={"jsonld": True},
+        raw={"jsonld": True, **({"deadline_source": "schema.org validThrough"} if deadline else {})},
     )
 
 

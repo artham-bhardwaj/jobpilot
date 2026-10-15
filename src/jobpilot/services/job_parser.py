@@ -203,6 +203,14 @@ _REQ_CUE = re.compile(r"\b(experience (?:with|in|using)|proficien\w*|knowledge o
                       r"working knowledge|competen\w*|fluency|fluent)\b", re.I)
 _PREF_CUE = re.compile(r"\b(nice to have|good to have|a plus|is a plus|bonus|preferred|desirable|ideally|"
                        r"familiarity|exposure to|would be great)\b", re.I)
+# Explicit must-have wording wins over softer cues ("Familiarity with Git is required"); "not required" doesn't count.
+_MUST_CUE = re.compile(r"(?<!not )\b(must|mandatory|required)\b", re.I)
+# Soft spans inside a sentence: skills there are examples or interests, never requirements on their own.
+_EXAMPLE_CUE = re.compile(r"(?<![a-z])(such as|e\.g\.?|eg\.|for example|for instance)(?![a-z])", re.I)
+_INTEREST_CUE = re.compile(
+    r"\b(interest(?:ed)?(?: (?:or|and/or|and) (?:experience|background|familiarity))? in|passion(?:ate)? (?:for|about)|"
+    r"curiosity (?:about|for)|enthusiasm for|(?:eager|eagerness|willing|willingness|keen|desire) to learn)\b", re.I)
+_SPAN_END = re.compile(r";|,\s+and\b|\.\s|$")
 _RESP_CUE = re.compile(r"\b(you will|you'll|you will be|build|develop|design|implement|maintain|own|work on|write)\b", re.I)
 _INCIDENTAL = re.compile(r"\b(our (?:tech )?stack|tech stack|we use|we're using|built (?:on|with)|powered by|our platform|"
                          r"our products?|our customers|we are a|about us|we offer|perks|benefits|"
@@ -226,7 +234,9 @@ _DEGREE_EQUIV = re.compile(r"\bor equivalent(?: practical| professional| work| r
 def _sentences(text: str) -> list[str]:
     out = []
     for line in text.splitlines():
-        out.extend(x.strip() for x in re.split(r"(?<=[.!?;])\s+", line) if x.strip())
+        # Don't split after abbreviations ("e.g. AWS" must stay with the sentence it qualifies).
+        parts = re.split(r"(?<=[.!?;])(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!\beg\.)(?<!\bvs\.)\s+", line)
+        out.extend(x.strip() for x in parts if x.strip())
     return out
 
 
@@ -259,26 +269,35 @@ def classify_skills(title: str, text: str, company: str | None = None) -> tuple[
     req_txt, pref_txt, other_txt = split_sections(text)
     has_req = bool(req_txt.strip())
     ev: dict[str, dict] = {}
+    rank = {"required": 3, "preferred": 2, "mentioned": 1}
 
-    def put(skill: str, kind: str, basis: str, where: str, snippet: str) -> None:
-        rank = {"required": 3, "preferred": 2, "mentioned": 1}
+    def put(skill: str, kind: str, basis: str, where: str, snippet: str, qualifier: str) -> None:
         if skill not in ev or rank[kind] > rank[ev[skill]["kind"]]:
-            ev[skill] = {"kind": kind, "basis": basis, "where": where, "snippet": snippet[:200]}
+            ev[skill] = {"kind": kind, "basis": basis, "where": where, "snippet": snippet[:200], "qualifier": qualifier}
+
+    def put_sentence(sentence: str, kind: str, basis: str, where: str) -> None:
+        """Classify one sentence's skills; skills named only as examples or interests never become required."""
+        head, soft = _soft_spans(sentence)
+        head_skills = skills_in(head)
+        qualifier = _qualifier(sentence, kind)
+        for sk in head_skills:
+            put(sk, kind, basis, where, sentence, qualifier)
+        for span, soft_q in soft:
+            for sk in skills_in(span):
+                if sk not in head_skills:
+                    put(sk, "preferred" if kind == "required" else kind, basis, where, sentence, soft_q)
 
     for sentence in _sentences(req_txt):
-        for sk in skills_in(sentence):
-            kind = "preferred" if _PREF_CUE.search(sentence) else "required"
-            put(sk, kind, "explicit", "requirements section", sentence)
+        soft_cue = _PREF_CUE.search(sentence) and not _MUST_CUE.search(sentence)
+        put_sentence(sentence, "preferred" if soft_cue else "required", "explicit", "requirements section")
     for sentence in _sentences(pref_txt):
-        for sk in skills_in(sentence):
-            put(sk, "preferred", "explicit", "preferred / nice-to-have", sentence)
+        put_sentence(sentence, "preferred", "explicit", "preferred / nice-to-have")
     for sentence in _sentences(other_txt):
-        skills = skills_in(sentence)
-        if not skills:
+        if not skills_in(sentence):
             continue
         if _INCIDENTAL.search(sentence):
             kind, basis, where = "mentioned", "explicit", "company/stack description (not a requirement)"
-        elif _PREF_CUE.search(sentence):
+        elif _PREF_CUE.search(sentence) and not _MUST_CUE.search(sentence):
             kind, basis, where = "preferred", "explicit", "preference wording"
         elif _REQ_CUE.search(sentence):
             kind, basis, where = "required", "explicit", "requirement wording"
@@ -288,12 +307,50 @@ def classify_skills(title: str, text: str, company: str | None = None) -> tuple[
             kind, basis, where = "required", "inferred", "listed in the posting (no requirements section)"
         else:
             kind, basis, where = "mentioned", "explicit", "mentioned in passing"
-        for sk in skills:
-            put(sk, kind, basis, where, sentence)
+        put_sentence(sentence, kind, basis, where)
     if not has_req:
         for sk in skills_in(title):
-            put(sk, "required", "inferred", "job title", title)
+            put(sk, "required", "inferred", "job title", title, "requirement")
     return ev, has_req
+
+
+def _soft_spans(sentence: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split a sentence into the part that states requirements and spans that only give examples or interests.
+
+    "Rails, or comparable depth in another framework, such as Django or Ecto" → head keeps Rails; Django and Ecto
+    are examples. "Interest or experience in AI/ML" → AI/ML is an interest. Returns (head, [(span, qualifier)]).
+    """
+    spans: list[tuple[int, int, str]] = []
+    for rx, qualifier in ((_EXAMPLE_CUE, "example"), (_INTEREST_CUE, "interest")):
+        for m in rx.finditer(sentence):
+            if sentence[:m.start()].count("(") > sentence[:m.start()].count(")"):
+                close = sentence.find(")", m.end())
+                end = close if close != -1 else len(sentence)
+            else:
+                end = m.end() + _SPAN_END.search(sentence, m.end()).start() - m.end()
+            spans.append((m.start(), end, qualifier))
+    if not spans:
+        return sentence, []
+    head = list(sentence)
+    for start, end, _ in spans:
+        head[start:end] = " " * (end - start)
+    return "".join(head), [(sentence[start:end], q) for start, end, q in spans]
+
+
+def _qualifier(sentence: str, kind: str) -> str:
+    """How strongly the sentence asks for its (non-example) skills."""
+    if kind == "mentioned":
+        return "mention"
+    if kind == "required":
+        return "requirement"
+    low = sentence.lower()
+    if "familiar" in low:
+        return "familiarity"
+    if "exposure" in low:
+        return "exposure"
+    if _INTEREST_CUE.search(sentence):
+        return "interest"
+    return "preference"
 
 
 def parse(title: str, description: str | None, location: str | None = None,
@@ -345,7 +402,8 @@ def parse(title: str, description: str | None, location: str | None = None,
 
     if structured.get("valid_through"):
         p.application_deadline = str(structured["valid_through"])[:10]
-        p.evidence["deadline"] = _ev(p.application_deadline, "structured", "source data (validThrough)")
+        p.evidence["deadline"] = _ev(p.application_deadline, "structured",
+                                     f"source data ({structured.get('deadline_source') or 'validThrough'})")
     else:
         m = _DEADLINE.search(text)
         p.application_deadline = _parse_date(m.group("date")) if m else None

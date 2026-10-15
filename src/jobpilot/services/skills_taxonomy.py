@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from jobpilot.services.text_utils import contains_term, normalize
+from jobpilot.services.text_utils import contains_term, normalize, normalize_company
 
 SKILLS: dict[str, tuple[str, list[str]]] = {
     # Languages
@@ -17,7 +17,7 @@ SKILLS: dict[str, tuple[str, list[str]]] = {
     "python": ("language", ["python", "python3", "python 3"]),
     "javascript": ("language", ["javascript", "js", "ecmascript"]),
     "typescript": ("language", ["typescript"]),
-    "go": ("language", ["golang", "go lang"]),
+    "go": ("language", ["go", "golang", "go lang"]),  # bare "Go" only in a technical context (_ambiguous_ok)
     "c++": ("language", ["c++", "cpp"]),
     "c#": ("language", ["c#", "csharp", ".net", "dotnet"]),
     "kotlin": ("language", ["kotlin"]),
@@ -171,11 +171,19 @@ def category_of(name: str) -> str | None:
     return entry[0] if entry else None
 
 
-def extract_skills(text: str | None, extra_terms: list[str] | None = None) -> list[str]:
-    """Return canonical skills mentioned in ``text`` (ordered by first occurrence)."""
+def extract_skills(text: str | None, extra_terms: list[str] | None = None, ignore: list[str] | None = None) -> list[str]:
+    """Return canonical skills mentioned in ``text`` (ordered by first occurrence).
+
+    ``ignore``: company names blanked out before matching (suffixes like "Inc." dropped), e.g. the employer's own
+    name: "GitLab" in GitLab's postings is not a git requirement.
+    """
     if not text:
         return []
     norm = normalize(text)
+    for term in ignore or []:
+        t = normalize_company(term)
+        if len(t) >= 3:
+            norm = re.sub(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9+#])", lambda m: " " * len(m.group(0)), norm)
     found: dict[str, int] = {}
     # Longest aliases first; matched spans are blanked so "spring boot" doesn't also count as "spring".
     for alias, canon in _INDEX:

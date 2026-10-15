@@ -247,8 +247,15 @@ def _ev(value, basis: str, snippet: str | None = None) -> dict:
     return {"value": value, "basis": basis, "snippet": (snippet or "")[:200] or None}
 
 
-def classify_skills(title: str, text: str) -> tuple[dict[str, dict], bool]:
-    """Classify every recognised skill as required / preferred / mentioned, with where it came from."""
+def classify_skills(title: str, text: str, company: str | None = None) -> tuple[dict[str, dict], bool]:
+    """Classify every recognised skill as required / preferred / mentioned, with where it came from.
+
+    The employer's own name is ignored ("GitLab" in GitLab's postings is not a git requirement)."""
+    ignore = [company] if company else None
+
+    def skills_in(s: str) -> list[str]:
+        return extract_skills(s, ignore=ignore)
+
     req_txt, pref_txt, other_txt = split_sections(text)
     has_req = bool(req_txt.strip())
     ev: dict[str, dict] = {}
@@ -259,14 +266,14 @@ def classify_skills(title: str, text: str) -> tuple[dict[str, dict], bool]:
             ev[skill] = {"kind": kind, "basis": basis, "where": where, "snippet": snippet[:200]}
 
     for sentence in _sentences(req_txt):
-        for sk in extract_skills(sentence):
+        for sk in skills_in(sentence):
             kind = "preferred" if _PREF_CUE.search(sentence) else "required"
             put(sk, kind, "explicit", "requirements section", sentence)
     for sentence in _sentences(pref_txt):
-        for sk in extract_skills(sentence):
+        for sk in skills_in(sentence):
             put(sk, "preferred", "explicit", "preferred / nice-to-have", sentence)
     for sentence in _sentences(other_txt):
-        skills = extract_skills(sentence)
+        skills = skills_in(sentence)
         if not skills:
             continue
         if _INCIDENTAL.search(sentence):
@@ -284,20 +291,20 @@ def classify_skills(title: str, text: str) -> tuple[dict[str, dict], bool]:
         for sk in skills:
             put(sk, kind, basis, where, sentence)
     if not has_req:
-        for sk in extract_skills(title):
+        for sk in skills_in(title):
             put(sk, "required", "inferred", "job title", title)
     return ev, has_req
 
 
 def parse(title: str, description: str | None, location: str | None = None,
-          structured: dict | None = None) -> ParsedRequirements:
+          structured: dict | None = None, company: str | None = None) -> ParsedRequirements:
     """Extract requirements from a posting. ``structured`` holds values supplied by the source's structured
     data (e.g. ``{"remote_type": "remote", "employment_type": "Full-time"}``); those take precedence."""
     text = description or ""
     structured = structured or {}
     p = ParsedRequirements()
 
-    p.skill_evidence, p.requirements_section_found = classify_skills(title, text)
+    p.skill_evidence, p.requirements_section_found = classify_skills(title, text, company)
     p.mandatory_skills = [k for k, v in p.skill_evidence.items() if v["kind"] == "required"]
     p.preferred_skills = [k for k, v in p.skill_evidence.items() if v["kind"] == "preferred"]
     p.mentioned_skills = [k for k, v in p.skill_evidence.items() if v["kind"] == "mentioned"]

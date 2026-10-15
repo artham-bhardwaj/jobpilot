@@ -196,7 +196,8 @@ def evaluate(session: Session, job: Job, weights: dict[str, float] | None = None
     profile = profile_svc.get_profile(session)
     cand = profile_svc.skill_profile(session)
     have = {k for k, v in cand.items() if v["status"] == "confirmed"}
-    parsed = job_parser.parse(job.title, job.description_text, job.location, structured=_structured_from_job(job))
+    parsed = job_parser.parse(job.title, job.description_text, job.location, structured=_structured_from_job(job),
+                              company=job.company_name)
     category = classify(job.title, job.description_text, categories)
     title_norm = f" {normalize(job.title)} "
     missing_job: list[str] = []

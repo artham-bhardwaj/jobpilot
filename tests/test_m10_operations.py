@@ -6,7 +6,7 @@ import sys
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from jobpilot.models import TaskRun, utcnow
 from jobpilot.services.tasks import INTERRUPTED, run_task, task_lock
@@ -93,3 +93,71 @@ def test_assist_pauses_on_login_walls_and_mfa_without_filling(chrome_page, html,
     assert res.status == "paused" and any(reason in r for r in res.pause_reasons), res.pause_reasons
     assert chrome_page.input_value("#e") == "" and not res.filled
     assert submitted == []
+
+
+GH_BOARD = "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs"
+
+
+def _two_openings(title_b_suffix=" "):
+    """Shape seen on a real board: two openings (different ids/requisitions) for the same role and location."""
+    def job(i, title):
+        return {"id": i, "title": title, "absolute_url": f"https://job-boards.greenhouse.io/examplecorp/jobs/{i}",
+                "location": {"name": "Remote, Germany"}, "content": "Requirements: Java, SQL"}
+    import json
+
+    return json.dumps({"jobs": [job(101, "Strategic Account Executive"), job(102, "Strategic Account Executive" + title_b_suffix)]})
+
+
+def test_same_source_openings_with_same_title_stay_separate_and_stable(db, settings):
+    from jobpilot.models import Job
+    from jobpilot.services import jobs as job_svc
+
+    job_svc.save_source(db, job_svc.SourceIn(name="Examplecorp", kind="greenhouse", company_name="Examplecorp",
+                                             config={"board_token": "examplecorp"}))
+    first = job_svc.collect_all(db, settings, make_http(settings, {GH_BOARD: (200, _two_openings())}))["sources"]["Examplecorp"]
+    assert first["new"] == 2 and first["updated"] == 0
+    for _ in range(2):
+        again = job_svc.collect_all(db, settings, make_http(settings, {GH_BOARD: (200, _two_openings())}))["sources"]["Examplecorp"]
+        assert again["unchanged"] == 2 and again["updated"] == 0, again
+    jobs = {j.external_id: j for j in db.scalars(select(Job))}
+    assert set(jobs) == {"101", "102"}
+    assert all(j.apply_url.endswith(f"/jobs/{ext}") for ext, j in jobs.items()), "each job keeps its own apply URL"
+
+
+def test_cross_source_fingerprint_dedup_still_works(db, settings):
+    from jobpilot.models import Job
+    from jobpilot.services import jobs as job_svc
+
+    job_svc.save_source(db, job_svc.SourceIn(name="Examplecorp", kind="greenhouse", company_name="Examplecorp",
+                                             config={"board_token": "examplecorp"}))
+    job_svc.collect_all(db, settings, make_http(settings, {GH_BOARD: (200, _two_openings(""))}))
+    manual, outcome = job_svc.add_manual(db, job_svc.ManualJobIn(title="Strategic Account Executive",
+                                                                 company_name="Examplecorp", location="Remote, Germany"))
+    assert outcome == "duplicate" and db.scalar(select(func.count(Job.id))) == 2
+
+
+# ---- Parsing discrepancies found on the first live board (Milestone 10) ----------------------
+
+@pytest.mark.parametrize("sentence,expected", [
+    ("• Professional experience with Go or another backend or systems language.", ["go"]),
+    ("• Design, build, and maintain Go-based automation for PostgreSQL.", ["go", "postgresql"]),
+    ("We go to market quickly and go beyond expectations.", []),
+])
+def test_bare_go_is_recognised_only_as_the_language(sentence, expected):
+    from jobpilot.services.skills_taxonomy import extract_skills
+
+    assert extract_skills(sentence) == expected
+
+
+def test_employers_own_name_is_not_a_skill_requirement():
+    from jobpilot.services import job_parser
+
+    text = ("Requirements:\n- Experience with Ruby on Rails\n- You will help GitLab customers succeed\n"
+            "How GitLab Supports Full-Time Employees\n")
+    for company in ("GitLab", "GitLab Inc."):
+        p = job_parser.parse("Backend Engineer", text, company=company)
+        assert "git" not in p.skill_evidence and p.mandatory_skills == ["ruby"], company
+    p = job_parser.parse("Security Engineer", "Requirements:\n- Experience administering Git/GitLab", company="GitLab")
+    assert p.mandatory_skills == ["git"], "a real Git requirement still counts"
+    other = job_parser.parse("Engineer", "Requirements:\n- Experience with GitLab merge requests", company="Examplecorp")
+    assert "git" in other.mandatory_skills, "another employer asking for GitLab experience still counts"

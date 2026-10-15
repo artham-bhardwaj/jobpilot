@@ -1,6 +1,6 @@
 # JobPilot — implementation status
 
-**Source of truth for what is verified.** Last updated: 2026-10-16, after Milestone 10's offline phases (304 tests passing).
+**Source of truth for what is verified.** Last updated: 2026-10-16, after Milestone 10's offline phases and the first live Greenhouse test (310 tests passing).
 Commits: `19f3d19` baseline, `04b70f3` Milestone 8, `cb9b23f` Milestone 9, then the Milestone 10 offline phases
 ("Complete milestone 10 reliability validation").
 `docs/CHECKLIST.md` is superseded by this file.
@@ -100,7 +100,7 @@ Defect 1 was reproduced manually before the fix.
 - **Email:** sending needs approval plus a typed `SEND`; daily send limit; draft revisions are kept.
 - **Gmail tests:** stubbed Google endpoints only.
 
-### Source adapters (none live-tested; all offline with synthetic/recorded fixtures)
+### Source adapters (Milestone 9: all offline; Greenhouse since live-verified on one board in Milestone 10)
 
 All network fetches go through `PoliteHttp`:
 - 20 s timeout; 2 retries on 429/5xx, honouring `Retry-After` (capped at 60 s);
@@ -110,7 +110,7 @@ All network fetches go through `PoliteHttp`:
 
 | Adapter | Input / config | Requests per run | Snapshot & expiry | Known restrictions |
 |---|---|---|---|---|
-| Greenhouse | `{"board_token": "<co>"}` → `boards-api.greenhouse.io/v1/boards/<co>/jobs?content=true` | robots.txt + 1 | full snapshot; expiry after 2 consecutive misses; empty board or >50% vanish (≥10 active) = anomaly | real response shape not yet compared; job-board URLs (`boards.`/`job-boards.`, EU) recognised for single-job add |
+| Greenhouse | `{"board_token": "<co>"}` → `boards-api.greenhouse.io/v1/boards/<co>/jobs?content=true` | robots.txt + 1 | full snapshot; expiry after 2 consecutive misses; empty board or >50% vanish (≥10 active) = anomaly | live-verified on one board (GitLab, 215 postings); job-board URLs (`boards.`/`job-boards.`, EU) recognised for single-job add |
 | Lever | `{"site": "<co>"}` → `api.lever.co/v0/postings/<co>?mode=json` | robots.txt + 1 per 100 postings (max 22) | full snapshot below 2,200 postings; above that partial (fixed above) | EU Lever (`api.eu.lever.co`) boards not supported for collection |
 | Ashby | `{"board": "<co>"}` → `api.ashbyhq.com/posting-api/job-board/<co>` | robots.txt + 1 | full snapshot; unlisted jobs skipped | fixture built from public docs, not a recorded response |
 | JSON-LD pages | `{"urls": [...]}` (≤50 individual job pages) | robots.txt + 1 per URL | never a full snapshot; a page expires only after consecutive 404/410 | no JS-rendered or login-walled pages; listing pages not crawled |
@@ -123,17 +123,18 @@ Expected requests: `GET https://boards-api.greenhouse.io/robots.txt`, then
 Then one real run (2 requests), and a second real run later to confirm stability and that nothing expires wrongly.
 Compare 5 stored jobs against their public pages for title, location, description and apply URL.
 
-## Milestone 10 — real-world validation & application readiness (offline phases complete; live phases await authorisation)
+## Milestone 10 — real-world validation & application readiness (offline phases and first live Greenhouse test complete)
 
-**No external service was contacted.** Your `./data` is unchanged: DB SHA-256 identical, still schema **0005**
-(1 profile row, 1 audit entry; no skills, work history, resumes or sources), `backups/` and `files/` empty.
-It was not migrated: nothing live has run against it yet, and migrating only to turn the health check green is not a reason.
+**The only external service contacted is `boards-api.greenhouse.io`** (6 read-only requests, see "Live Greenhouse
+validation" below), and only into a scratch copy of your data. Your `./data` is unchanged: DB SHA-256 identical,
+still schema **0005** (1 profile row, 1 audit entry; no skills, work history, resumes or sources), `backups/` and `files/`
+empty. It was not migrated; migrating only to turn the health check green is not a reason.
 
 ### Results
 
 | Check | Result |
 |---|---|
-| Full suite (inside a loopback-only network namespace) | **304 passed, 0 failed, 0 skipped, 0 errors, 173.9 s** (Milestone 9 baseline: 294) |
+| Full suite (inside a loopback-only network namespace) | **310 passed, 0 failed, 0 skipped, 0 errors, 174.1 s** after the live-test fixes (304 before; Milestone 9 baseline: 294) |
 | Milestone 9 review | Committed as `cb9b23f` after reviewing the staged diff and scanning it for secrets and personal data. Within JobPilot, `edit_draft` is the only code path that changes a draft's recipient, subject or body, so a Gmail draft created before an edit cannot be sent afterwards. The attached resume is fixed when the draft is created. Edits made **inside Gmail** are sent as they are in Gmail (your own edit, not stale content). |
 | Acceptance (`tests/test_m10_acceptance.py`) | One synthetic flow covering all 20 criteria, including: Gmail draft created → draft edited → send refused until re-approved → only the new draft (`d-2`, new text) is sent; wrong-host browser approval refused; headless Chrome fills the synthetic form and the page server receives **no POST**; an anomalous then a failed source run expire nothing; backup and restore keep the jobs, the "applied" application, run history and draft revisions. |
 
@@ -156,7 +157,7 @@ can prove no form submission happened.
 | Integration | Classification |
 |---|---|
 | Source engine (dedup, provenance, expiry, partial/anomaly, dry run, run history, failure isolation) | Automated-test verified (synthetic) |
-| Greenhouse | Synthetic/offline verified; **blocked by authorisation** for live (see request below) |
+| Greenhouse | **Live external service verified** (read-only, one board: GitLab, 2026-10-16; scratch data only; see below) |
 | Lever, Ashby, JSON-LD pages | Synthetic/offline verified; not tested live |
 | CSV/JSON import, add by URL | Automated-test verified (synthetic files; URL fetch offline only) |
 | Matching, eligibility, resume selection, application preparation | Automated-test verified (synthetic profile). Real-profile calibration: **not possible yet**, because your profile has no skills or experience and there are no resumes |
@@ -169,7 +170,7 @@ can prove no form submission happened.
 | JS-rendered, login-walled or CAPTCHA-protected application sites | Unsupported by design (assist pauses and hands over to you) |
 
 ### Remaining risks
-- Real Greenhouse responses may differ from the fixture.
+- Greenhouse was verified live on one board only (GitLab, 3.4 MB response); other boards may differ.
   - A board whose JSON with `content=true` exceeds the 5 MB response cap fails safely: nothing is saved or expired.
     In that case a smaller board is needed, or a reviewed change to the cap.
   - If `boards-api.greenhouse.io/robots.txt` disallows the API path, JobPilot refuses to fetch it, by design.
@@ -179,7 +180,64 @@ can prove no form submission happened.
 - No per-run job limit: a source run imports the whole board. To keep the first live test bounded, run it against a
   scratch data directory and review the results before importing into your real data.
 
-### Authorisation request: first live source (nothing has been contacted)
+### Live Greenhouse validation (2026-10-16, authorised: GitLab, host `boards-api.greenhouse.io` only)
+
+**Scope kept:**
+- Scratch copy of the data directory only. Your real DB's SHA-256 is unchanged and it is still at 0005.
+- Retries disabled. A guard around JobPilot's own `PoliteHttp` refused any other host, port or path, and more than
+  one robots.txt plus one listing request per run. Nothing was refused.
+- robots.txt was checked first, through JobPilot's own parser; the harness would have stopped had it been unreachable.
+- No email, Gmail, application-form or other host was contacted.
+
+| Run | Requests (all `boards-api.greenhouse.io`, HTTPS) | Result |
+|---|---|---|
+| 1 dry run | `GET /robots.txt` 200 (131 B); `GET /v1/boards/gitlab/jobs?content=true` 200 (3,378,486 B) | success; 215 fetched; nothing saved |
+| 2 import | same 2 requests, 200/200 | success; **215 new**, 0 errors, 0 expired |
+| 3 re-run | same 2 requests, 200/200 | success; 215 unchanged; 0 new/updated/expired/missing |
+
+**Total: 6 requests, 1 host, 0 refused, 0 retries, 0 HTTP errors, 0 rate limits.**
+
+- **Board verified:** `gitlab` returns 215 postings, all with `company_name: "GitLab"` and URLs under
+  `job-boards.greenhouse.io/gitlab`. robots.txt disallows only `/embed/`.
+- **Accuracy:** all 215 stored jobs were compared with the raw API data: id, title, location, apply/source URL,
+  company, posted date, raw description, and HTML-free text. **0 mismatches.**
+  The comparison is with the API response; the rendered public pages were not visited, because that host was out of scope.
+- **Deduplication:** the 215 distinct ids give 215 jobs (after fix 3 below).
+  - A pasted copy with a tracking parameter matches by apply URL ("duplicate").
+  - A same-title/location manual copy matches by fingerprint.
+  - Provenance is added and nothing is overwritten. These checks were local and rolled back.
+- **Expiry:** none. All 215 are active with `miss_count` 0.
+
+**Defects found on real data and fixed** (regression tests in `tests/test_m10_operations.py`):
+
+3. **Two openings for the same role were merged and flip-flopped.** GitLab lists separate requisitions with the same
+   title and location (2 pairs). Fingerprint dedup merged them, then each run rewrote the job with the other
+   posting's data: one job carried posting A's id with posting B's apply URL, and was reported "updated" and
+   re-scored on every identical run. Fingerprint dedup now never merges postings that the same source lists under
+   different ids; cross-source dedup is unchanged. Replay of the saved response: 215 new, then 215 unchanged twice.
+4. **Skill extraction:**
+   - The employer's own name produced a "required" skill: "GitLab" is an alias of git, so **183 of 215** postings
+     required git with no git in the evidence. The employer's name is now ignored for its own postings;
+     "Git/GitLab experience" still counts.
+   - The bare word **"Go"** was never recognised: the alias list lacked "go", so Go was found in 0 of the Go-titled
+     roles. Now 28 postings require Go, and the verb "go" is still ignored.
+
+**Remaining parsing discrepancies (not fixed; recorded for calibration):**
+- "Rails, or comparable depth … such as Django or Ecto" makes Django "required"; examples of alternatives aren't
+  recognised.
+- "Interest or experience in AI/ML" is classed as required.
+- "concurrency" maps to `multithreading`.
+- Only 22 of 215 postings state years of experience; the rest are correctly "unknown", not guessed.
+- 16 postings with office-only locations (e.g. "Bangalore, India") have work mode "unknown", not guessed as remote.
+- Greenhouse's `application_deadline` field is not read by the adapter; none of the 215 postings set it.
+
+**Matching calibration: not possible yet.** Your profile has no confirmed skills or experience, so these scores
+reflect an empty profile. No weights or profile facts were changed.
+
+The scratch import is in the session scratch area (`gh_live/data`). Discard it or keep it for review; it is not
+connected to your real data.
+
+### Authorisation request: first live source (used for the test above)
 
 | # | Item | Value |
 |---|---|---|
@@ -297,16 +355,17 @@ Everything listed as verified in the previous audit still passes, plus the follo
 
 ## 2. Implemented but not verified against real services
 
-Offline tests passing does **not** mean these work live. None has contacted a real external service.
+Offline tests passing does **not** mean these work live. Apart from the one Greenhouse board in Milestone 10, none
+has contacted a real external service.
 
 | Item | Status |
 |---|---|
-| Greenhouse / Lever / Ashby public APIs | Offline-verified only. Real response shapes not yet compared (Ashby fixture built from public docs). |
+| Lever / Ashby public APIs | Offline-verified only. Real response shapes not yet compared (Ashby fixture built from public docs). Greenhouse: live-verified on one board (Milestone 10). |
 | JSON-LD career pages on real employer sites | Offline-verified only. Real pages vary widely. |
 | Gmail OAuth, drafts, send, reply sync, interview import | Offline-verified only (mocked Google endpoints, simulated browser). Needs your Google Cloud OAuth client. |
 | Browser assist on a real Greenhouse/Lever form, headed, with you completing it | Not run. Headless synthetic-form tests only. |
 | Spawning `jobpilot assist` from the web UI with browser enabled | Not run (only the disabled path, the host-approval refusal and the CLI error path are tested). |
-| Milestone 8 source health/expiry against real boards (429s, real empty boards, reposts) | Offline-verified only. |
+| Milestone 8 source health/expiry against real boards (429s, real empty boards, reposts) | Offline-verified only. Live: one Greenhouse board, three successful runs, no expiry (no 429s or empty boards occurred). |
 | Matching calibration on real postings | Not done; weights are defaults until you review real jobs on `/matching`. |
 | systemd user timer installed and firing on your machine | Unit files generated and tested; not installed. |
 | PDF generation | Verified with the local Chrome (headless). Not tested on other machines. |
@@ -350,8 +409,8 @@ Offline tests passing does **not** mean these work live. None has contacted a re
 
 ## 4. Failed tests and open defects
 
-- **Failed tests: none** (304/304 after Milestone 10's offline phases, run with the network removed).
-- **Open defects: none known.** Milestone 9's three and Milestone 10's two defects are fixed with regression tests. All of D1–D8 and S1–S3/S5 from the audit are fixed with regression tests.
+- **Failed tests: none** (310/310 after the live Greenhouse test fixes, run with the network removed).
+- **Open defects: none known.** Milestone 9's three and Milestone 10's four defects (two offline, two found on the live board) are fixed with regression tests. All of D1–D8 and S1–S3/S5 from the audit are fixed with regression tests.
   S4 (no auth) and S6 (unencrypted backups) are accepted limitations (§3).
 - One non-editable `pip install .` attempt failed during verification and could not be reproduced in three
   subsequent clean attempts. Its error message was hidden by `-q | tail -1`. Most likely cause: the isolated

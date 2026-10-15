@@ -4,7 +4,8 @@ Dedup rules (in order):
 1. Same source + external id                → same job.
 2. Same apply URL                           → same job.
 3. Same fingerprint (company+title+location) and the job is active
-                                            → same job seen elsewhere (new sighting).
+                                            → same job seen elsewhere (new sighting). Never applied to two
+                                              postings the same source lists under different ids.
 4. Same fingerprint but the old job expired → a **repost**: new job linked via ``repost_of_id``.
 """
 
@@ -77,7 +78,8 @@ def structured_fields(data: JobData) -> dict[str, Any]:
 
 def _apply_data(job: Job, data: JobData) -> None:
     structured = structured_fields(data)
-    parsed = job_parser.parse(data.title, data.description_text, data.location, structured=structured)
+    parsed = job_parser.parse(data.title, data.description_text, data.location, structured=structured,
+                              company=data.company_name)
     job.title = data.title[:300]
     job.company_name = data.company_name
     job.location = data.location
@@ -154,7 +156,13 @@ def find_existing(session: Session, source: JobSource | None, data: JobData) -> 
         if job:
             return job, "application_url"
     fp = fingerprint(data.company_name, data.title, data.location)
-    job = session.scalar(select(Job).where(Job.fingerprint == fp, Job.status == "active").order_by(Job.id.desc()))
+    q = select(Job).where(Job.fingerprint == fp, Job.status == "active")
+    if source is not None and data.external_id:
+        # The source itself says these are different postings (e.g. two openings for one role): never merge them,
+        # or each run would overwrite one posting's data and apply URL with the other's.
+        q = q.where(or_(Job.source_id.is_(None), Job.source_id != source.id, Job.external_id.is_(None),
+                        Job.external_id == data.external_id))
+    job = session.scalar(q.order_by(Job.id.desc()))
     return (job, "fingerprint") if job else (None, None)
 
 

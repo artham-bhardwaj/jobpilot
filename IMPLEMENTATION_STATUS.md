@@ -1,12 +1,120 @@
 # JobPilot — implementation status
 
-**Source of truth for what is verified.** Last updated: 2026-10-16, after the requirement-qualifier and deadline parsing work (357 tests passing).
+**Source of truth for what is verified.** Last updated: 2026-10-16, after Milestone 11 (end-to-end completion pass; 406 tests passing).
 Commits: `19f3d19` baseline, `04b70f3` Milestone 8, `cb9b23f` Milestone 9, `83f3061` Milestone 10 offline phases,
-`c57890d` live-Greenhouse fixes, then "Improve job requirement and deadline parsing".
+`c57890d` live-Greenhouse fixes, `d93af81` requirement and deadline parsing, then Milestone 11 (see below).
 `docs/CHECKLIST.md` is superseded by this file.
 
 Legend: **Verified** = exercised by automated tests and/or the live local checks below.
 **Offline-verified** = tested only against recorded/synthetic responses; the live service has not been contacted.
+
+## Milestone 11 — end-to-end completion pass (2026-10-16)
+
+Driven by the "final end-to-end build and completion" directive. No external service was contacted: everything below
+was tested offline (fake HTTP, fake DNS) or against a local server on a **scratch copy** of your data.
+
+### Starting state (audit)
+- Branch `master`, last commit `d93af81`. Uncommitted: an in-progress profile increment (certifications, achievements,
+  "outdated" status, kind of work per role, project kinds, preferred titles; migration 0007) plus its test file.
+- Baseline: 378 tests collected; 1 failure, caused only by the uncommitted 0007 migration (a test hard-coded "0006" as
+  head). Fixed by comparing against the Alembic head → **378 passed, 0 failed, 0 skipped**.
+- Your data (`./data`): schema **0006**, 1 profile, 1 employment (TCS, Systems Engineer, confirmed, kind of work not
+  recorded), 1 education, 24 skills (2 confirmed, 22 unverified), 6 resume slots, 1 approved resume version (your PDF),
+  14 audit entries. `integrity_check` ok. **Your own `jobpilot serve` was running** (pid 343782, since 01:29) against it.
+- Because your server was running, your real database was **not migrated**. 0007 was verified on a consistent snapshot
+  (SQLite backup API, read-only source): original columns byte-identical, `pre-migrate-0006` backup taken and intact,
+  `integrity_check` ok, no FK violations. Your next `jobpilot serve` applies it the same way. The real DB's SHA-256 was
+  checked unchanged after every step.
+
+### What changed
+
+| Commit | Area | Summary |
+|---|---|---|
+| `c1cfe43` | Profile | The uncommitted profile work, reviewed and committed. Certifications, achievements, `outdated` status, **kind of work** (only "software development" roles count as development experience: testing years give a *warning* on a development role's years requirement, never a pass; unrecorded kind = flagged), **project kinds** (never work experience), preferred titles, priorities. Migration 0007. |
+| `87cb40e` | Resumes | Version comparison (skills added/removed, new impact-metric lines, word-level similarity, line diff vs the latest approved version) and **claim checks** (unconfirmed skills, impact numbers, development wording under an employer recorded as non-development work, by name or initials). Approving a materially changed or contradicting version needs an explicit acknowledgement; the review is stored with the approval and audited. |
+| `b52c5c9` | Workflow | **Reminders** as review items (deadline approaching; submitted application with no update = "check on it", never a rejection; listing expired while an application is open), raised once per underlying fact. New scheduled tasks `rematch` (only stale scores), `reminders`, `health_check` (SQLite `quick_check`). **Backoff** for failed tasks (15 min × 2ⁿ, capped). Preparation record: stated deadline, resume checks, experience labelled by kind, **next action**. Interview prep: truthful STAR labels, questions about your projects, REST/testing topics. Learning checklist: demand × interview relevance ÷ rough effort. `jobpilot doctor`. |
+| `009240f` | Dashboard | Single "Next:" item, awaiting-approval count, stated deadlines (14 days), failing sources, last successful discovery run. End-to-end web test. |
+| final commit | CLI, docs | `serve` refuses an occupied port before start-up. README, user guide, this file. |
+
+### Defects found and fixed
+1. **Failed scheduled tasks were retried on every scheduler pass** (every 5 min): a board that is down would be fetched
+   ~288 times a day (×2 with the in-task retry). Now: backoff 15 min, 30 min, 1 h, … capped at the task's interval. The old
+   test asserting "failed tasks stay due immediately" was updated to the new contract (still due, after the backoff).
+2. **Saved scheduler settings hid tasks added later**: settings are merged one level deep, so a saved `tasks` dict
+   replaced the defaults and new tasks never appeared. The scheduler's `tasks` are now merged with the defaults
+   (other settings keep replace semantics, so deleting e.g. a role category still sticks).
+3. **`serve` on an occupied port** printed "JobPilot running at …", ran start-up (including any pending migration), then
+   died with uvicorn's raw bind error (exit 3). Now it stops first with a clear message (exit 2), before touching the DB.
+4. Tests hard-coded the head revision (would break on every new migration); a no-op `assert` in the new profile test.
+
+### Findings on your real data (scratch copy; nothing changed in `./data`)
+- **Resume claim check on your approved resume** (TCS role set to testing/QA in the copy only):
+  - 1 line is flagged: *"Developed and integrated Java/Spring Boot backend components for 1 of 4 modules in the
+    NCDEX…"*, under Tata Consultancy Services. You said your TCS work is primarily integration testing. **Only you can say
+    whether this line is accurate.** If it is, record the role's kind of work accordingly (or keep it as testing and
+    re-word the line). If it isn't, fix the resume and import the new version.
+  - 6 lines with impact numbers (50%, 45%, 60%, 60%, 50%, and a 95% score): make sure you can support each in an interview.
+  - 22 skills in the resume are not confirmed in your profile (e.g. Spring Boot, Docker, Kafka, Redis, AWS): they
+    count as unverified until you confirm them.
+- Your TCS role has no **kind of work** recorded, so development-role years checks will say "kind of work not recorded".
+  Set it on the Profile page (the directive says testing/QA; JobPilot did not set it for you).
+
+### Results
+
+| Check | Result |
+|---|---|
+| Full suite | **406 passed, 0 failed, 0 skipped, 0 errors** (350 s); baseline 378 |
+| Full suite inside a loopback-only network namespace (`unshare -rn`) | 406 passed, 0 failed, 0 skipped (the final run itself was network-isolated) |
+| End-to-end (`tests/test_m11_end_to_end.py`) | web UI: profile → resume import/approve → Greenhouse fixture ×2 (2 jobs, no duplicates, only the board URL requested) → match (testing years ≠ development years) → skill gaps → preparation → approval enforced (3 refusals) → evidence-gated submission → scheduled + manual reminders (1 item) → follow-up draft (unsent) → dashboard |
+| Local server on scratch copy, port 8799, scheduler on | `/health` ok (0007); 20 pages 200; `/docs` `/redoc` `/openapi.json` `/api/docs` 404; `/static/../data/jobpilot.db` 404; foreign Host 400; foreign and `null` Origin POST 403; `<script>` in a query escaped; CSP/`X-Frame-Options`/`nosniff`/`Referrer-Policy` present; bound to 127.0.0.1 only; SIGTERM exit in 218 ms |
+| Backup / restore (CLI, scratch) | `backup create` → restore into a separate copy whose skills were deleted: every table identical to the source afterwards; pre-restore backup taken; integrity ok |
+| `jobpilot doctor` | real data: reports 0006 → 0007 pending, skips checks, changes nothing (SHA-256 unchanged); scratch copy: all checks ok incl. integrity |
+| Gmail | minimal scopes (`gmail.compose` + `gmail.metadata`; `readonly` only if you opt in), token 0600; not configured, rest of JobPilot unaffected |
+| Dependency vulnerability scan | **not run**: no scanner (pip-audit) is installed, and installing one needs network access |
+
+### Definition of done (directive §25)
+
+| Requirement | Status |
+|---|---|
+| Starts reliably | **Verified** locally (scratch copy); clear errors for wrong directory and occupied port |
+| Existing data preserved | **Verified** (SHA-256 unchanged; migration and restore tested on copies) |
+| Migrations and backups safe | **Verified** (auto pre-migrate backup; isolated restore; old-schema backups upgraded) |
+| Profile created, edited, verified | **Verified** (tests; web) |
+| Resumes and versions managed safely | **Verified** (byte-for-byte storage, sha256, draft→approved, comparison, acknowledgement) |
+| Supported sources import reliably | Greenhouse **live-verified on one board** (M10); Lever, Ashby, JSON-LD **offline only** |
+| Normalized and deduplicated | **Verified** offline + on 215 live GitLab postings (M10) |
+| Expired listings and deadlines conservative | **Verified** (stated deadlines only; expiry only after consecutive misses) |
+| Explainable match scores | **Verified** |
+| Skill gaps from requirements and evidence | **Verified** |
+| Preparation uses verified information | **Verified** |
+| Unsupported claims flagged | **Verified** (drafts: missing facts; resumes: claim checks; answers: sensitive questions never auto-filled) |
+| Approval enforced | **Verified** |
+| History and evidence persist | **Verified** (events, evidence, audit; survive backup/restore; expiry never deletes) |
+| Follow-ups and interviews | **Verified** offline; Gmail sending **not live-tested** (needs your OAuth client) |
+| Scheduled work idempotent and recoverable | **Verified** (locks, interrupted-run recovery, once-per-fact reminders, backoff) |
+| Dashboard actionable | **Verified** |
+| External failures don't corrupt data | **Verified** (full-row comparisons, M9) |
+| Security and privacy checks | **Verified** locally; dependency scan **not run** (see above) |
+| Automated tests pass | **Verified** (406 passed, 0 failed, 0 skipped) |
+| End-to-end test | **Verified** |
+| README accurate | Updated and checked against the CLI |
+| Git changes committed | Yes (no push) |
+| No paid runtime service | **Verified** (no AI/LLM SDK; test enforces it) |
+| No hidden submission or sending | **Verified** (tests: approval + attestation + evidence; `SEND` confirmation; scheduler never sends) |
+
+**Not complete, because it needs you:**
+- Live tests of Lever, Ashby, JSON-LD sources, real application forms (browser assist, headed) and Gmail need your
+  authorisation, and for Gmail your own Google OAuth client.
+- Your real database is still at 0006 until you restart your server.
+- Real-profile calibration needs your confirmed skills and kind of work (see "Findings").
+
+### Remaining gaps (unchanged from Milestone 10 unless noted)
+- Parsing: "like X" / "including X" are not examples; "Kafka is a plus but Java is a must" makes Java preferred; Lever and
+  Ashby deadline fields are not read; ~90-entry skill dictionary.
+- Resume claim checks are heuristics: they flag lines to check and can miss or over-flag wording (e.g. "Score: 95%" counts as
+  an impact number). They never change a file or a fact.
+- Effort and interview-relevance estimates in the learning checklist are generic per skill category.
+- No app authentication (single-user, localhost-only); backups unencrypted; DNS-rebinding window (see §3).
 
 ## Milestone 8 — starting state (2026-10-15)
 

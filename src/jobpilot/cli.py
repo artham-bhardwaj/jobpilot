@@ -58,6 +58,20 @@ def cmd_init(args) -> int:
     return 0
 
 
+def _check_port_free(host: str, port: int) -> None:
+    """Fail clearly *before* start-up (and before any migration) when the port is taken."""
+    import socket
+
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn does; ignores TIME_WAIT leftovers
+        try:
+            sock.bind((host, port))
+        except OSError as exc:
+            raise CliError(f"Port {port} on {host} is already in use ({exc.strerror}). JobPilot may already be running: "
+                           f"open http://{host}:{port} or run `jobpilot doctor`. To use another port: "
+                           "`jobpilot serve --port <N>`.", code=2) from exc
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -71,6 +85,7 @@ def cmd_serve(args) -> int:
     except RuntimeError as exc:
         raise CliError(str(exc), code=2) from exc
     _require_database(settings)
+    _check_port_free(settings.host, settings.port)
     from jobpilot.logging_setup import configure_logging
     from jobpilot.web.app import create_app
 

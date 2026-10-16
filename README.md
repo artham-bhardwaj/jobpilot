@@ -40,7 +40,8 @@ is needed. Without Chrome, run `.venv/bin/playwright install chromium` and set t
 ## First steps
 
 1. **Profile** → fill in what you want to use, then *Confirm details*. Add skills and mark the ones
-   you can genuinely claim as *confirmed*.
+   you can genuinely claim as *confirmed*. For each role, set **Kind of work** (only "software development"
+   counts as development experience).
 2. **Resumes** → *Create standard resume slots* (Master, Java Backend, SDE I, General SWE, Python
    Backend, AI/ML) → import your existing PDF/DOCX into each → review → *Approve*.
 3. **Settings** → adjust `search_preferences` (keywords, exclusions, locations, levels, salary) and
@@ -95,6 +96,7 @@ jobpilot delete-data profile|contacts|outreach|everything [--include-backups]
 jobpilot scheduler run-due|status|run --task NAME|systemd [--out DIR]
 jobpilot gmail auth|status|sync|revoke    # optional, see docs/GMAIL_SETUP.md
 jobpilot db upgrade|current
+jobpilot doctor                           # read-only diagnostics: paths, schema, server, health, integrity
 jobpilot --debug <command>                # show a full traceback if something fails
 ```
 
@@ -103,7 +105,7 @@ jobpilot --debug <command>                # show a full traceback if something f
 ## Tests
 
 ```bash
-.venv/bin/pytest            # 357 tests, offline (fake HTTP, fake DNS), synthetic fixtures only
+.venv/bin/pytest            # 406 tests, offline (fake HTTP, fake DNS), synthetic fixtures only (~6 min)
 ```
 
 A few tests drive your local Chrome headlessly (PDF rendering, form-fill safety); they are skipped
@@ -112,8 +114,8 @@ job boards, Gmail or employer forms behave the same way. See `IMPLEMENTATION_STA
 
 ## Optional scheduling
 
-Scheduled tasks (collect jobs, follow-up check, maintenance, backup, Gmail reply sync) are **off**
-by default. Enable each in **Settings → scheduler**, then either:
+Scheduled tasks (collect jobs, expiry check, score updates, deadline/application reminders, follow-up check,
+backup, health check, Gmail reply sync) are **off** by default. Enable each in **Settings → scheduler**, then either:
 
 - set `JOBPILOT_SCHEDULER_ENABLED=true` so `jobpilot serve` runs them while it is open, or
 - install the systemd user timer (runs while you're logged in; `Persistent=true` catches up after
@@ -127,13 +129,16 @@ by default. Enable each in **Settings → scheduler**, then either:
 
 Overlapping runs are prevented with per-task file locks. Running both the in-process scheduler and the timer is
 safe (the locks stop a task from running twice), but one of them is enough. Nothing runs while the laptop sleeps;
-due tasks run on the next pass after it wakes. Scheduled tasks never send email or submit applications.
+due tasks run on the next pass after it wakes, once each (reminders are raised once per fact, so catching up never
+duplicates them). A failed task backs off (15 min, 30 min, 1 h, …) instead of retrying on every pass.
+Scheduled tasks never send email or submit applications.
 
 ## Safe start and stop
 
 ```bash
 cd ~/projects/jobpilot
 .venv/bin/jobpilot db current        # read-only: shows {"current", "head", "pending"}; changes nothing
+.venv/bin/jobpilot doctor            # optional, read-only: health, integrity, whether a server is already running
 .venv/bin/jobpilot serve             # migrates if "pending" was true (backup first), then serves 127.0.0.1:8765
 ```
 
@@ -145,6 +150,21 @@ waits for a running scheduled task, and exits. Database writes are transactional
 (power loss, `kill -9`) leaves the last committed state; a source run interrupted mid-way saves nothing, and a
 task left "running" is recorded as failed ("Interrupted") the next time JobPilot starts. A browser-assistance
 window can be closed at any time; the application record keeps what was saved before.
+
+## Troubleshooting and recovery
+
+| Symptom | What to do |
+|---|---|
+| `No JobPilot database at …` | You're in the wrong directory, or `JOBPILOT_DATA_DIR` points elsewhere. `cd ~/projects/jobpilot` and retry; `jobpilot doctor` prints the paths it uses. Run `jobpilot init` only for a brand-new install. |
+| `Port 8765 … is already in use` on serve | A server is already running (`jobpilot doctor` says so). Use it, or stop it with Ctrl-C in its terminal, or start on another port: `jobpilot serve --port 8766`. |
+| "migration pending" in `db current` / `doctor` | Normal after an update. `jobpilot serve` (or `jobpilot db upgrade`) applies it after taking a `pre-migrate-<rev>` backup. |
+| A failed migration or bad data | Stop the server, then `jobpilot backup list` and `jobpilot backup restore --name <file>`; the current state is backed up first, and an older-schema backup is upgraded on restore. |
+| A source keeps failing | See **Sources → (source) → history**. Failed, rate-limited or empty runs never change or expire existing jobs; the scheduler backs off. Disable the source if the board moved. |
+| `doctor` / `/health` shows a failing check | The detail line says what's wrong (permissions, disk, schema, integrity). Integrity failure: restore the newest good backup. |
+| Something odd | `jobpilot --debug <command>` shows the traceback; logs are in `data/logs/jobpilot.log` (System page shows them). |
+
+Known limitations and what has and hasn't been verified against live services are listed in
+[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 ## Configuration
 

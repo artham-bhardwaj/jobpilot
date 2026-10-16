@@ -331,3 +331,19 @@ def test_doctor_is_read_only_and_reports_pending_migration_and_health(tmp_path):
     r = subprocess.run([sys.executable, "-m", "jobpilot", "doctor"], capture_output=True, text=True, timeout=60,
                        env={"JOBPILOT_DATA_DIR": str(empty), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)})
     assert r.returncode == 2 and "jobpilot init" in r.stderr and not empty.exists()
+
+
+def test_serve_refuses_an_occupied_port_before_start_up(tmp_path):
+    import socket
+
+    from tests.test_m9_validation import _cli, _schema5_db
+
+    settings = _schema5_db(tmp_path)
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        r = _cli(tmp_path, "serve", "--port", str(port))
+    assert r.returncode == 2 and f"Port {port} on 127.0.0.1 is already in use" in r.stderr
+    assert "running at" not in r.stdout
+    assert not list(settings.backup_dir.glob("*.zip")), "nothing was migrated or backed up"

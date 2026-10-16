@@ -48,7 +48,10 @@ def detail(resume_id: int, request: Request, db: Session = Depends(get_db)):
         "education": list(db.scalars(select(Education).where(Education.status == "confirmed"))),
         "skills": list(db.scalars(select(Skill).where(Skill.status == "confirmed").order_by(Skill.name))),
     }
-    return render(request, "resume_detail.html", resume=r, confirmed=confirmed, profile=ps.get_profile(db))
+    # Drafts: what to check before approving. Approved versions: what you are currently sending out.
+    reviews = {v.id: rs.review_version(db, v) for v in r.versions if v.status != "archived"}
+    return render(request, "resume_detail.html", resume=r, confirmed=confirmed, profile=ps.get_profile(db),
+                  reviews=reviews)
 
 
 @router.post("/{resume_id:int}/upload")
@@ -83,11 +86,12 @@ async def generate(resume_id: int, request: Request, db: Session = Depends(get_d
 
 
 @router.post("/versions/{version_id:int}/{action}")
-def version_action(version_id: int, action: str, db: Session = Depends(get_db)):
+async def version_action(version_id: int, action: str, request: Request, db: Session = Depends(get_db)):
     v = get_or_404(db, ResumeVersion, version_id)
+    form = await form_dict(request)
     try:
         if action == "approve":
-            rs.approve_version(db, v)
+            rs.approve_version(db, v, acknowledged=bool(form.get("acknowledge")))
         elif action == "archive":
             rs.archive_version(db, v)
         else:

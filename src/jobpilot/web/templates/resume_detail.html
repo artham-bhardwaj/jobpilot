@@ -26,10 +26,28 @@
         </td>
         <td class="nowrap">{{ v.created_at|dt }}</td>
         <td class="nowrap">
-          {% if v.status == "draft" %}<form method="post" action="/resumes/versions/{{ v.id }}/approve" class="inline" data-confirm="Approve v{{ v.version_no }}? You confirm the file content is accurate and ready to send."><button class="small primary">approve</button></form>{% endif %}
+          {% if v.status == "draft" %}{% set rv = reviews.get(v.id) %}<form method="post" action="/resumes/versions/{{ v.id }}/approve" class="inline" data-confirm="Approve v{{ v.version_no }}? You confirm the file content is accurate and ready to send.">{% if rv and rv.needs_acknowledgement %}<label class="checkbox small"><input type="checkbox" name="acknowledge" value="1" required> I reviewed these changes</label>{% endif %}<button class="small primary">approve</button></form>{% endif %}
           {% if v.status != "archived" %}<form method="post" action="/resumes/versions/{{ v.id }}/archive" class="inline"><button class="small">archive</button></form>{% endif %}
         </td>
       </tr>
+      {% set rv = reviews.get(v.id) %}
+      {% if rv %}<tr><td></td><td colspan="7" class="wrap small">
+        {% if v.status == "draft" %}<b>Before approving v{{ v.version_no }}</b>
+        {% for reason in rv.reasons %}<div class="notice warn">Needs your acknowledgement: {{ reason }}</div>{% endfor %}
+        {% else %}<b>Checks on this approved version</b> <span class="muted">(re-run against your current profile)</span>{% endif %}
+        {% set c = rv.comparison %}
+        {% if c.first_version %}<div class="muted">First version of this resume: nothing to compare with.</div>
+        {% else %}<div>Compared with {{ c.previous }}: {{ c.lines_added }} line(s) added, {{ c.lines_removed }} removed, similarity {{ (c.similarity * 100)|round|int }}%{% if c.material %} — <b>material change</b>{% endif %}.</div>
+          {% if c.skills_added %}<div>skills added: {% for s in c.skills_added %}<span class="tag">{{ s }}</span>{% endfor %}</div>{% endif %}
+          {% if c.skills_removed %}<div>skills removed: {% for s in c.skills_removed %}<span class="tag">{{ s }}</span>{% endfor %}</div>{% endif %}
+          {% if c.diff %}<details><summary>line changes</summary><pre class="desc">{% for d in c.diff %}{{ d }}
+{% endfor %}{% if c.diff_truncated %}… (truncated){% endif %}</pre></details>{% endif %}
+        {% endif %}
+        {% set cl = rv.claims %}
+        {% if cl.unconfirmed_skills %}<div>Skills in this file that are <b>not confirmed</b> in your profile (confirm them only if you can back them up): {% for s in cl.unconfirmed_skills %}<span class="tag">{{ s }}</span>{% endfor %}</div>{% endif %}
+        {% if cl.metrics %}<details><summary>{{ cl.metrics|length }} line(s) with numbers of impact — make sure you can support each</summary><ul>{% for m in cl.metrics %}<li>{{ m }}</li>{% endfor %}</ul></details>{% endif %}
+        {% for x in cl.contradictions %}<div class="notice bad">Check: {{ x }}</div>{% endfor %}
+      </td></tr>{% endif %}
       {% if v.extracted_text %}<tr><td></td><td colspan="7"><details><summary class="small">extracted text</summary><div class="desc">{{ v.extracted_text }}</div></details></td></tr>{% endif %}
     {% endfor %}
     </tbody>

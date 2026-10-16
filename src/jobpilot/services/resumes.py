@@ -152,14 +152,129 @@ def import_version(session: Session, settings: Settings, resume: Resume, filenam
     return version
 
 
-def approve_version(session: Session, version: ResumeVersion) -> ResumeVersion:
+# ---- Review: changes between versions and claims to check ----------------------
+
+# A number with a unit of improvement ("40%", "3x") or an improvement verb followed by a number.
+_METRIC = re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|percent\b|x\b|×)|\b(?:reduc|improv|increas|cut|boost|sav|grew|accelerat)\w*"
+                     r"\b[^.\n]{0,60}?\d", re.I)
+_DEV_CLAIM = re.compile(r"\b(software (?:developer|engineer|development)|back-?end (?:developer|engineer|development)|"
+                        r"full[- ]?stack|developed|built|implemented|programmed|coded)\b", re.I)
+_SECTION_HEADING = re.compile(r"^(experience|work experience|employment|projects?|personal projects|education|skills|"
+                              r"technical skills|certifications?|achievements|summary|profile)\s*:?$", re.I)
+
+
+def _company_aliases(company: str) -> list[str]:
+    """The company name and its initials ("Tata Consultancy Services" → "tcs"), for spotting it in a resume."""
+    words = [w for w in re.findall(r"[A-Za-z]+", company) if w.lower() not in ("ltd", "limited", "inc", "pvt", "private")]
+    out = [company.lower()]
+    if len(words) >= 2:
+        out.append("".join(w[0] for w in words).lower())
+    return out
+
+
+def claim_check(session: Session, text: str | None) -> dict[str, Any]:
+    """What a resume claims that your profile does not back up. Flags are things to check, not verdicts.
+
+    - ``unconfirmed_skills``: skills found in the text that are not *confirmed* in your profile;
+    - ``metrics``: lines with numbers of impact ("cut latency by 40%"), which you should be able to support;
+    - ``contradictions``: development wording near an employer whose role you recorded as non-development work.
+    """
+    text = text or ""
+    statuses = {s.normalized_name: s.status for s in session.scalars(select(Skill))}
+    detected = extract_skills(text)
+    unconfirmed = sorted({s for s in detected if statuses.get(s) != "confirmed"})
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    metrics = [ln[:200] for ln in lines if _METRIC.search(ln)][:20]
+    contradictions: list[str] = []
+    roles = [e for e in session.scalars(select(Employment).where(Employment.status == "confirmed"))
+             if e.role_type and e.role_type != profile_svc.DEVELOPMENT_ROLE]
+    for e in roles:
+        aliases = _company_aliases(e.company)
+        for i, ln in enumerate(lines):
+            if not any(re.search(rf"\b{re.escape(a)}\b", ln.lower()) for a in aliases):
+                continue
+            # The role's own line and the bullet lines under it, up to the next section heading.
+            for follow in lines[i:i + 10]:
+                if follow is not ln and _SECTION_HEADING.match(follow):
+                    break
+                m = _DEV_CLAIM.search(follow)
+                if m:
+                    contradictions.append(f"“{follow[:160]}” — appears under {e.company}, which your profile records as "
+                                          f"{e.role_type.replace('_', ' ')} work (wording: “{m.group(0)}”)")
+    return {"unconfirmed_skills": unconfirmed, "metrics": metrics, "contradictions": sorted(set(contradictions))[:10]}
+
+
+def previous_version(session: Session, version: ResumeVersion) -> ResumeVersion | None:
+    """The version to compare against: the latest earlier *approved* one, else the one just before."""
+    earlier = [v for v in version.resume.versions if v.version_no < version.version_no and v.id != version.id]
+    approved = [v for v in earlier if v.status == "approved" or v.approved_at]
+    pool = approved or earlier
+    return max(pool, key=lambda v: v.version_no) if pool else None
+
+
+def compare_versions(old: ResumeVersion | None, new: ResumeVersion) -> dict[str, Any]:
+    """Line-level differences and skill changes between two versions' extracted text."""
+    import difflib
+
+    new_lines = [ln.strip() for ln in (new.extracted_text or "").splitlines() if ln.strip()]
+    new_sk = set((new.validation or {}).get("skills_detected") or [])
+    if old is None:
+        return {"previous": None, "material": False, "first_version": True, "skills_added": sorted(new_sk),
+                "skills_removed": [], "lines_added": len(new_lines), "lines_removed": 0, "similarity": None, "diff": []}
+    old_lines = [ln.strip() for ln in (old.extracted_text or "").splitlines() if ln.strip()]
+    old_sk = set((old.validation or {}).get("skills_detected") or [])
+    diff = [d for d in difflib.unified_diff(old_lines, new_lines, lineterm="", n=0)
+            if not d.startswith(("---", "+++", "@@"))]
+    added = sum(1 for d in diff if d.startswith("+"))
+    removed = sum(1 for d in diff if d.startswith("-"))
+    # Word-level, so a one-word edit in a short resume doesn't count as a rewrite.
+    similarity = round(difflib.SequenceMatcher(None, " ".join(old_lines).split(), " ".join(new_lines).split(),
+                                               autojunk=False).ratio(), 3)
+    new_metrics = {ln for ln in new_lines if _METRIC.search(ln)} - {ln for ln in old_lines if _METRIC.search(ln)}
+    material = bool(new_sk ^ old_sk) or bool(new_metrics) or similarity < 0.9
+    return {"previous": old.label, "previous_id": old.id, "material": material, "first_version": False,
+            "skills_added": sorted(new_sk - old_sk), "skills_removed": sorted(old_sk - new_sk),
+            "new_metric_lines": sorted(new_metrics)[:10], "lines_added": added, "lines_removed": removed,
+            "similarity": similarity, "diff": diff[:300], "diff_truncated": len(diff) > 300}
+
+
+def review_version(session: Session, version: ResumeVersion) -> dict[str, Any]:
+    """Everything to check before approving: changes since the previous version, and claims to verify.
+
+    Approval needs an explicit acknowledgement when the version changed materially since an earlier approved
+    version, or when it contains wording that contradicts your recorded kind of work.
+    """
+    prev = previous_version(session, version)
+    comparison = compare_versions(prev, version)
+    claims = claim_check(session, version.extracted_text)
+    reasons = []
+    if comparison["material"] and prev is not None:
+        reasons.append(f"material changes since {comparison['previous']}")
+    if claims["contradictions"]:
+        reasons.append(f"{len(claims['contradictions'])} statement(s) contradict your recorded kind of work")
+    return {"comparison": comparison, "claims": claims, "needs_acknowledgement": bool(reasons), "reasons": reasons}
+
+
+def approve_version(session: Session, version: ResumeVersion, acknowledged: bool = False) -> ResumeVersion:
     if version.status == "approved":
         return version
     if version.validation and version.validation.get("errors"):
         raise ResumeError("Version has validation errors and cannot be approved")
+    review = review_version(session, version)
+    if review["needs_acknowledgement"] and not acknowledged:
+        raise ResumeError("Review before approving: " + "; ".join(review["reasons"])
+                          + ". Tick “I reviewed these changes” to approve.")
     version.status = "approved"
     version.approved_at = utcnow()
-    audit.record(session, "resume.version.approved", "resume_version", version.id, resume_id=version.resume_id)
+    # Keep what was reviewed at approval time, so the audit trail shows what you accepted.
+    version.validation = {**(version.validation or {}), "approval_review": {
+        "compared_with": review["comparison"]["previous"], "material": review["comparison"]["material"],
+        "skills_added": review["comparison"]["skills_added"], "skills_removed": review["comparison"]["skills_removed"],
+        "unconfirmed_skills": review["claims"]["unconfirmed_skills"], "metrics": len(review["claims"]["metrics"]),
+        "contradictions": review["claims"]["contradictions"], "acknowledged": bool(acknowledged)}}
+    audit.record(session, "resume.version.approved", "resume_version", version.id, resume_id=version.resume_id,
+                 acknowledged=bool(acknowledged), material=review["comparison"]["material"],
+                 contradictions=len(review["claims"]["contradictions"]))
     return version
 
 

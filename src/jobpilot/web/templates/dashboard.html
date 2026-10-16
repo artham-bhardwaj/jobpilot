@@ -15,7 +15,15 @@
 </section>
 {% endif %}
 
+{% if stats.next_item %}<div class="notice"><b>Next:</b> {% if stats.next_item.link %}<a href="{{ stats.next_item.link }}">{{ stats.next_item.title }}</a>{% else %}{{ stats.next_item.title }}{% endif %}
+  <span class="muted">({{ stats.next_item.category_label }})</span> — {{ stats.next_item.recommended }}
+  {% if stats.review_count > 1 %}<a href="/review" class="small">and {{ stats.review_count - 1 }} more →</a>{% endif %}</div>
+{% elif not todo %}<div class="notice">Nothing needs your attention right now.</div>{% endif %}
+
 <div class="stats">
+  <div class="stat"><a href="/review?category=submission_approval"><div class="v">{{ stats.awaiting_approval }}</div><div class="l">awaiting your approval</div></a></div>
+  <div class="stat"><a href="#deadlines"><div class="v">{{ stats.deadlines_count }}</div><div class="l">deadlines in the next 14 days</div></a></div>
+  <div class="stat"><a href="/sources"><div class="v">{{ stats.source_failures|length }}</div><div class="l">failing sources · last discovery {{ stats.last_discovery|dt if stats.last_discovery else "never" }}</div></a></div>
   <div class="stat"><a href="/jobs"><div class="v">{{ stats.jobs_active }}</div><div class="l">active jobs ({{ stats.jobs_new_7d }} new this week)</div></a></div>
   <div class="stat"><a href="/jobs?min_score={{ stats.threshold }}"><div class="v">{{ stats.jobs_relevant }}</div><div class="l">relevant (score ≥ {{ stats.threshold }})</div></a></div>
   <div class="stat"><a href="/jobs?user_status=shortlisted"><div class="v">{{ stats.shortlisted }}</div><div class="l">shortlisted</div></a></div>
@@ -44,7 +52,11 @@
   {% else %}{{ empty("No new relevant jobs. Run your sources or import jobs.") }}{% endif %}
 </section>
 
-<section class="card">
+<section class="card" id="deadlines">
+  <h2>Upcoming deadlines</h2>
+  {% for due, j in stats.deadlines %}<div>{{ due|d }} · <a href="/jobs/{{ j.id }}">{{ j.title }}</a> <span class="muted small">{{ j.company_name or "?" }}</span></div>
+  {% else %}{{ empty("No stated deadlines for shortlisted jobs or applications in progress. Deadlines are only taken from the posting, never guessed.") }}{% endfor %}
+  {% for src, run in stats.source_failures %}<div class="notice warn">Source <a href="/sources/{{ src.id }}">{{ src.name }}</a>: last run {{ run.status }} ({{ run.started_at|dt }}). Existing jobs were not changed.</div>{% endfor %}
   <h2>Upcoming interviews</h2>
   {% for i in stats.upcoming %}<div><a href="/interviews/{{ i.id }}">{{ i.application.job.title }}</a> · {{ i.application.job.company_name or "?" }}
     <span class="muted small">{{ i.scheduled_at|dt if i.scheduled_at else "date TBD" }} · {{ i.stage|replace("_"," ") }}</span></div>

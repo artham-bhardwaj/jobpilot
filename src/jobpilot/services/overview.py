@@ -7,7 +7,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from jobpilot.models import AuditLog, Job, JobSource, Resume, ResumeVersion, TaskRun, utcnow
+from jobpilot.models import Application, AuditLog, Job, JobSource, Resume, ResumeVersion, SourceRun, TaskRun, utcnow
 from jobpilot.services import applications as apps
 from jobpilot.services import drafts as ds
 from jobpilot.services import interviews as iv_svc
@@ -26,7 +26,6 @@ def stats(session: Session) -> dict:
         "shortlisted": session.scalar(active.where(Job.user_status == "shortlisted")) or 0,
         "applications": apps.counts(session),
         "upcoming": iv_svc.upcoming(session, limit=5),
-        "review_count": queue.count(session),
         "followups_due": len(ds.due_followups(session)),
         "threshold": threshold,
         "top_jobs": list(session.scalars(select(Job).where(Job.status == "active", Job.user_status == "new",
@@ -59,7 +58,36 @@ def stats(session: Session) -> dict:
         ("Review search preferences", _prefs_saved(session), "/settings"),
     ]
     out["resume_slots"] = session.scalar(select(func.count(Resume.id))) or 0
+    out.update(_attention(session, now))
     return out
+
+
+def _attention(session: Session, now) -> dict:
+    """Counts that say what needs doing next. Read-only: nothing here writes (reminders are raised by the scheduler)."""
+    from jobpilot.services import reminders
+
+    awaiting = session.scalar(select(func.count(Application.id)).where(Application.status == "ready_for_review",
+                                                                      Application.submission_approved_at.is_(None))) or 0
+    open_job_ids = select(Application.job_id).where(Application.status.in_(reminders.OPEN_APP_STATES))
+    deadlines = []
+    for job in session.scalars(select(Job).where(Job.status == "active", Job.user_status != "dismissed",
+                                                 (Job.user_status == "shortlisted") | Job.id.in_(open_job_ids))):
+        due = reminders.deadline_of(job)
+        if due is not None and now <= due <= now + timedelta(days=14):
+            deadlines.append((due, job))
+    deadlines.sort(key=lambda x: x[0])
+    failing = []
+    for src in session.scalars(select(JobSource).where(JobSource.enabled.is_(True))):
+        last = session.scalar(select(SourceRun).where(SourceRun.source_id == src.id, SourceRun.dry_run.is_(False))
+                              .order_by(SourceRun.id.desc()).limit(1))
+        if last and last.status in ("failed", "unavailable", "anomaly"):
+            failing.append((src, last))
+    last_ok = session.scalar(select(func.max(SourceRun.finished_at)).where(
+        SourceRun.dry_run.is_(False), SourceRun.status.in_(("success", "partial"))))
+    items = queue.build(session)  # built once: the count and the single most important item
+    top = min(items, key=lambda i: (-i["priority"], -(i["score"] or 0)), default=None)
+    return {"awaiting_approval": awaiting, "deadlines": deadlines[:8], "deadlines_count": len(deadlines),
+            "source_failures": failing, "last_discovery": last_ok, "next_item": top, "review_count": len(items)}
 
 
 def _prefs_saved(session: Session) -> bool:

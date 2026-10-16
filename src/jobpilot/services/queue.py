@@ -33,11 +33,13 @@ CATEGORIES = {
     "strong_match": ("Strong matches", 90),
     "browser_intervention": ("Browser needs you", 85),
     "submission_approval": ("Submission approval", 80),
+    "deadline_soon": ("Deadlines approaching", 78),
     "interview_detected": ("Possible interviews", 75),
     "failed_operation": ("Failed or incomplete operations", 70),
     "eligibility_uncertain": ("Eligibility uncertain", 60),
     "draft_review": ("Email drafts to review", 55),
     "follow_up_due": ("Follow-ups due", 50),
+    "application_check": ("Applications to check on", 48),
     "no_suitable_resume": ("No suitable resume", 45),
     "contact_verification": ("Contacts to verify", 40),
     "missing_profile_info": ("Missing profile information", 35),
@@ -46,6 +48,7 @@ CATEGORIES = {
 STORED_KIND_TO_CATEGORY = {
     "browser_paused": "browser_intervention", "submission_approval": "submission_approval",
     "interview_detected": "interview_detected", "follow_up_due": "follow_up_due", "resume_missing": "no_suitable_resume",
+    "deadline_soon": "deadline_soon", "application_stale": "application_check", "listing_expired": "application_check",
 }
 JOB_CATEGORIES = {"strong_match", "eligibility_uncertain", "new_job"}
 BULK_ACTIONS = {
@@ -176,13 +179,20 @@ def build(session: Session) -> list[dict[str, Any]]:
         if ri.kind == "interview_detected":
             link = f"/interviews?suggestion={ri.id}"
         app = session.get(Application, ri.entity_id) if ri.entity_type == "application" else None
-        items.append(_item(cat, f"stored:{ri.id}", ri.title, ri.reason or "", job=app.job if app else None,
+        job = app.job if app else (session.get(Job, ri.entity_id) if ri.entity_type == "job" else None)
+        if ri.entity_type == "job":
+            existing = session.scalar(select(Application).where(Application.job_id == ri.entity_id).limit(1))
+            link = f"/applications/{existing.id}" if existing else f"/jobs/{ri.entity_id}"
+        items.append(_item(cat, f"stored:{ri.id}", ri.title, ri.reason or "", job=job,
                            state=ri.kind.replace("_", " "),
                            recommended={"browser_intervention": "Finish the paused steps yourself in the browser",
                                         "submission_approval": "Review the prepared application, then approve submission",
                                         "interview_detected": "Check the extracted details and confirm or dismiss",
                                         "follow_up_due": "Draft a follow-up or record that they replied",
-                                        "no_suitable_resume": "Import and approve a suitable resume"}[cat],
+                                        "no_suitable_resume": "Import and approve a suitable resume",
+                                        "deadline_soon": "Finish and submit before the deadline, or dismiss if not applying",
+                                        "application_check": "Check the employer's portal; record any update, "
+                                                             "follow up politely, or withdraw. Never assume a rejection"}[cat],
                            actions=[{"label": "Open", "url": link, "method": "get"}] if link else [],
                            created=ri.created_at, link=link) | {"stored_id": ri.id})
 

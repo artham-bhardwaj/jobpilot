@@ -83,7 +83,14 @@ DEFAULTS: dict[str, Any] = {
             "maintenance": {"enabled": False, "every_hours": 24},
             "backup": {"enabled": False, "every_hours": 24},
             "gmail_sync": {"enabled": False, "every_hours": 6},
+            "rematch": {"enabled": False, "every_hours": 24},
+            "reminders": {"enabled": False, "every_hours": 12},
+            "health_check": {"enabled": False, "every_hours": 24},
         },
+        # Reminders: how early to warn about a stated deadline, and when a submitted application with no
+        # recorded update is worth checking on (never treated as a rejection).
+        "deadline_warning_days": 3,
+        "stale_application_days": 21,
     },
     # Role categories: id -> {label, title_keywords, skill_keywords}.
     "role_categories": {
@@ -212,7 +219,10 @@ class ScheduledTask(BaseModel):
 class SchedulerSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     keep_backups: int = Field(default=14, ge=1, le=365)
-    tasks: dict[Literal["collect_jobs", "followup_check", "maintenance", "backup", "gmail_sync"], ScheduledTask] = {}
+    tasks: dict[Literal["collect_jobs", "followup_check", "maintenance", "backup", "gmail_sync", "rematch", "reminders",
+                        "health_check"], ScheduledTask] = {}
+    deadline_warning_days: int = Field(default=3, ge=1, le=30)
+    stale_application_days: int = Field(default=21, ge=3, le=120)
 
 
 class RoleCategory(BaseModel):
@@ -258,6 +268,9 @@ def get(session: Session, key: str) -> Any:
     if isinstance(default, dict) and isinstance(row.value, dict):
         merged = default
         merged.update(row.value)
+        if key == "scheduler":
+            # Tasks added in later versions appear (disabled) even when you saved scheduler settings before.
+            merged["tasks"] = {**copy.deepcopy(DEFAULTS[key]["tasks"]), **(row.value.get("tasks") or {})}
         return merged
     return row.value
 

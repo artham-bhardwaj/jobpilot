@@ -10,6 +10,8 @@
   {% if app.duplicate_override_note %}<br>Your note: {{ app.duplicate_override_note }}{% endif %}</div>{% endif %}
 {% if job.eligibility in ("ineligible", "unknown") %}<div class="notice warn">Eligibility is <b>{{ job.eligibility }}</b> — check the job page before applying.</div>{% endif %}
 
+<div class="notice"><b>Next action:</b> {{ next_step }}</div>
+
 <section class="card">
   <h2>Status</h2>
   <form method="post" action="/applications/{{ app.id }}/status" class="filters">
@@ -33,6 +35,7 @@
         <tr><th>Apply at</th><td>{% if prep.application_url %}<a href="{{ prep.application_url }}" target="_blank" rel="noopener noreferrer">{{ prep.application_url[:70] }}</a>{% else %}<span class="muted">no application URL — find it on the posting</span>{% endif %}</td></tr>
         <tr><th>Match</th><td>{{ prep.match.score }} · {{ prep.match.recommendation }} · {{ prep.match.eligibility }} · {{ prep.match.confidence }} confidence</td></tr>
         <tr><th>Resume</th><td>{{ prep.resume.label or "none selected" }}{% if prep.resume.selected_by %} <span class="muted">({{ prep.resume.selected_by[:120] }})</span>{% endif %}</td></tr>
+        <tr><th>Deadline</th><td>{% if prep.deadline %}{{ prep.deadline.date }} <span class="muted">({{ prep.deadline.basis }})</span>{% else %}<span class="muted">not stated in the posting</span>{% endif %}</td></tr>
         <tr><th>Answers</th><td>{{ prep.answers.approved }}/{{ prep.answers.total }} approved{% if prep.answers.sensitive %} · {{ prep.answers.sensitive }} sensitive{% endif %}</td></tr>
         <tr><th>Contacts</th><td>{% for c in prep.contacts %}<a href="/contacts/{{ c.id }}">{{ c.name }}</a> ({{ c.role }}, {{ c.email_status or "no email" }}){% if c.do_not_contact %} DNC{% endif %}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none known — JobPilot won't invent one</span>{% endfor %}</td></tr>
         <tr><th>Drafts</th><td>{% for d in prep.drafts %}<a href="/drafts/{{ d.id }}">#{{ d.id }} {{ d.kind }}</a> ({{ d.status }}){% if not loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td></tr>
@@ -42,6 +45,10 @@
       {% for h in prep.match.hard_conflicts %}<div class="notice bad">Hard conflict: {{ h }}</div>{% endfor %}
       {% if prep.match.warnings %}<b>Eligibility warnings</b><ul>{% for w in prep.match.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
       {% for w in prep.resume.warnings %}<div class="notice warn">{{ w }}</div>{% endfor %}
+      {% set cl = prep.resume.claims %}
+      {% if cl %}{% for x in cl.contradictions %}<div class="notice bad">Resume check: {{ x }}</div>{% endfor %}
+        {% if cl.unconfirmed_job_skills %}<div class="notice warn">The resume lists skills this job asks for that are not confirmed in your profile: {{ cl.unconfirmed_job_skills|join(", ") }}. Be ready to back them up, or confirm them on your profile.</div>{% endif %}
+        {% if cl.metrics %}<div class="small muted">The resume has {{ cl.metrics }} line(s) with impact numbers; make sure you can support each.</div>{% endif %}{% endif %}
       <b>Verified facts that match</b>: {{ prep.facts.skills_matched|join(", ") or "none" }}
       {% for e in prep.facts.experience %}<div>{{ e.kind }}: {{ e.label }} — {{ e.skills|join(", ") }}</div>{% endfor %}
       {% if prep.facts.skills_unverified %}<div>Unverified in your profile: {{ prep.facts.skills_unverified|join(", ") }}</div>{% endif %}

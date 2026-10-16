@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+from datetime import datetime
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -11,10 +12,11 @@ from sqlalchemy.orm import Session
 from jobpilot import __version__
 from jobpilot.config import Settings
 from jobpilot.db import current_revision, head_revision
-from jobpilot.models import TaskRun
+from jobpilot.models import JobSource, SourceRun, TaskRun
 
 
-def check(settings: Settings, session: Session) -> dict:
+def check(settings: Settings, session: Session, deep: bool = False) -> dict:
+    """``deep`` adds an SQLite integrity check (reads the whole file; used by the scheduled check and ``doctor``)."""
     checks: dict[str, dict] = {}
     try:
         session.execute(text("SELECT 1"))
@@ -52,4 +54,29 @@ def check(settings: Settings, session: Session) -> dict:
         "ok": True,
         "detail": f"{failed.task_name} at {failed.started_at:%Y-%m-%d %H:%M}" if failed else "none",
     }
+    if deep:
+        try:
+            res = session.execute(text("PRAGMA quick_check")).scalar()
+            checks["integrity"] = {"ok": res == "ok", "detail": res}
+        except Exception as exc:  # pragma: no cover - defensive
+            checks["integrity"] = {"ok": False, "detail": str(exc)}
+
+    from jobpilot.services.backup import list_backups
+
+    backups = list_backups(settings)
+    if backups:
+        age = (datetime.now() - backups[0]["modified"]).days
+        checks["backups"] = {"ok": True, "detail": f"{len(backups)} backup(s); newest {age} day(s) old"
+                             + (" — consider `jobpilot backup create`" if age > 7 else "")}
+    else:
+        checks["backups"] = {"ok": True, "detail": "no backups yet — run `jobpilot backup create`"}
+
+    failing = []
+    for src in session.scalars(select(JobSource).where(JobSource.enabled.is_(True))):
+        last = session.scalar(select(SourceRun).where(SourceRun.source_id == src.id, SourceRun.dry_run.is_(False))
+                              .order_by(SourceRun.id.desc()).limit(1))
+        if last and last.status in ("failed", "unavailable", "anomaly"):
+            failing.append(f"{src.name} ({last.status})")
+    checks["sources"] = {"ok": True, "detail": ("last run not successful: " + ", ".join(failing)) if failing
+                         else "no failing sources"}
     return {"version": __version__, "ok": all(c["ok"] for c in checks.values()), "checks": checks}

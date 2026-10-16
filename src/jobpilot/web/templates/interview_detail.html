@@ -61,12 +61,15 @@
     <h3>Job skills</h3>
     <p>You have: {% for s in c.job_skills_you_have %}<span class="tag have">{{ s }}</span>{% else %}<span class="muted">none confirmed</span>{% endfor %}</p>
     <p>Review: {% for s in c.job_skills_to_review %}<span class="tag miss">{{ s }}</span>{% else %}<span class="muted">none</span>{% endfor %}</p>
+    {% if c.job_skills_learning %}<p class="small">Currently learning: {{ c.job_skills_learning|join(", ") }} — say honestly how far you are.</p>{% endif %}
+    {% if c.job_skills_missing %}<p class="small">Not in your profile: {{ c.job_skills_missing|join(", ") }} — revise the basics and be upfront that you haven't used them.</p>{% endif %}
     {% for sec in c.sections %}
       <h3>{{ sec.title }}</h3>
       <ul>{% for it in sec["items"] %}<li>{{ it }}</li>{% endfor %}</ul>
       <p class="small"><b>Practice:</b> {{ sec.practice|join(" · ") }}</p>
     {% endfor %}
     <h3>Stories from your verified experience</h3><ul>{% for s in c.stories %}<li>{{ s }}</li>{% endfor %}</ul>
+    {% if c.project_questions %}<h3>Questions about your projects</h3><ul>{% for q in c.project_questions %}<li>{{ q }}</li>{% endfor %}</ul>{% endif %}
     <h3>Questions to ask</h3><ul>{% for q in c.questions_to_ask %}<li>{{ q }}</li>{% endfor %}</ul>
   {% else %}<p class="muted">Not generated yet.</p>{% endif %}
 </section>

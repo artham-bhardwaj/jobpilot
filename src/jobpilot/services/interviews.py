@@ -224,6 +224,17 @@ TOPICS: dict[str, dict[str, list[str]]] = {
         "Data model: mutability, references, copying", "Generators, iterators, comprehensions", "Decorators and context managers",
         "The GIL, threading vs multiprocessing vs asyncio", "Typing and dataclasses / pydantic", "Testing with pytest"],
         "practice": ["Write a decorator that retries a function", "Explain when asyncio helps"]},
+    "rest": {"title": ["REST APIs & backend engineering"], "items": [
+        "HTTP methods, safety and idempotency (GET/PUT/DELETE vs POST, PATCH)", "Status codes: 2xx/4xx/5xx and when to use each",
+        "Resource and URL design, versioning", "Pagination, filtering and sorting", "Validation and consistent error responses",
+        "Authentication vs authorisation; sessions, JWT and OAuth basics", "Idempotency keys, retries and timeouts",
+        "Caching headers and ETags", "Rate limiting", "API documentation (OpenAPI) and backward compatibility"],
+        "practice": ["Design the API for a library-management service", "How do you make a payment endpoint safe to retry?"]},
+    "testing": {"title": ["Testing"], "items": [
+        "Unit vs integration vs end-to-end tests; the test pyramid", "Mocks, stubs and fakes — and when not to mock",
+        "Integration testing of APIs and databases; test data management", "Contract testing between services",
+        "Testing in CI; flaky tests and how to fix them", "Writing a good defect report"],
+        "practice": ["How would you test a REST endpoint that writes to a database?", "How do you find the cause of a flaky test?"]},
     "lld": {"title": ["Low-level design"], "items": [
         "SOLID principles", "Design patterns: strategy, factory, observer, builder, singleton, decorator",
         "Class diagrams and responsibilities", "Concurrency in designs (locks, thread safety)"],
@@ -251,11 +262,11 @@ STAGE_TOPICS = {
     "hiring_manager": ["behavioral", "hld"],
     "online_assessment": ["dsa", "sql"],
     "coding": ["dsa"],
-    "technical": ["dsa", "{lang}", "{framework}", "sql"],
+    "technical": ["dsa", "{lang}", "{framework}", "sql", "{api}"],
     "system_design": ["hld", "lld"],
     "low_level_design": ["lld", "{lang}"],
-    "onsite": ["dsa", "{lang}", "{framework}", "sql", "lld", "hld", "behavioral"],
-    "other": ["dsa", "{lang}", "behavioral"],
+    "onsite": ["dsa", "{lang}", "{framework}", "sql", "{api}", "lld", "hld", "behavioral"],
+    "other": ["dsa", "{lang}", "{api}", "behavioral"],
 }
 
 
@@ -274,16 +285,40 @@ def generate_prep_pack(session: Session, iv: Interview) -> PrepPack:
     job_skills = set((skills.get("mandatory") or []) + (skills.get("preferred") or []))
     lang, framework = _lang_framework(job_skills, job.category)
     keys: list[str] = []
+    backend = job.category in ("java_backend", "python_backend") or bool(
+        job_skills & {"rest api", "microservices", "spring boot", "django", "fastapi", "flask"})
     for k in STAGE_TOPICS.get(iv.stage, STAGE_TOPICS["other"]):
-        k = k.replace("{lang}", lang or "").replace("{framework}", framework or "")
+        k = k.replace("{lang}", lang or "").replace("{framework}", framework or "").replace("{api}", "rest" if backend else "")
         if k and k in TOPICS and k not in keys:
             keys.append(k)
+    if job_skills & {"unit testing", "junit", "pytest", "selenium"} and "testing" not in keys and iv.stage != "hr":
+        keys.append("testing")
     if job.category == "ai_ml" and "ml" not in keys and iv.stage in ("technical", "onsite", "other"):
         keys.append("ml")
 
     confirmed = profile_svc.confirmed_skills(session)
-    stories = [f"{e.title} at {e.company}" for e in session.scalars(select(Employment).where(Employment.status == "confirmed"))]
-    stories += [p.name for p in session.scalars(select(Project).where(Project.status == "confirmed"))]
+    learning = profile_svc.learning_skills(session)
+    # STAR prompts only from confirmed facts, each labelled with what kind of experience it is, so a personal
+    # project is never told as production work and testing work is never told as development.
+    stories = []
+    for e in session.scalars(select(Employment).where(Employment.status == "confirmed")):
+        kind = (e.role_type or "").replace("_", " ")
+        if e.role_type and e.role_type != profile_svc.DEVELOPMENT_ROLE:
+            stories.append(f"Work — {e.title} at {e.company} ({kind}): draw on what you actually did there; present it "
+                           f"as {kind} work, not as software development")
+        else:
+            stories.append(f"Work — {e.title} at {e.company}" + (f" ({kind})" if kind else
+                           " (kind of work not recorded on your profile: describe it as it was)"))
+    project_questions = []
+    for p in session.scalars(select(Project).where(Project.status == "confirmed")):
+        label = {"academic": "academic project", "learning_exercise": "learning exercise",
+                 "open_source": "open-source contribution"}.get(p.kind or "personal", "personal project")
+        stories.append(f"{label.capitalize()} — {p.name}: not production experience; say so if asked")
+        tech = ", ".join(p.technologies or [])
+        project_questions += [f"{p.name}: walk me through the problem, your design and what you would change",
+                              f"{p.name}: why {tech}? What were the alternatives?" if tech else
+                              f"{p.name}: why did you choose the technologies you used?",
+                              f"{p.name}: how did you test it, and what broke?"]
     sections = [{"title": TOPICS[k]["title"][0], "items": TOPICS[k]["items"], "practice": TOPICS[k]["practice"]} for k in keys]
     content = {
         "header": {"job": job.title, "company": job.company_name, "stage": iv.stage, "round": iv.round_name or iv.round_no,
@@ -291,9 +326,12 @@ def generate_prep_pack(session: Session, iv: Interview) -> PrepPack:
                    "resume": app.resume_version.label if app.resume_version else None},
         "job_skills_you_have": sorted(job_skills & confirmed),
         "job_skills_to_review": sorted(job_skills - confirmed),
+        "job_skills_learning": sorted(job_skills & learning),
+        "job_skills_missing": sorted(job_skills - confirmed - learning),
         "sections": sections,
         "stories": [f"Prepare a STAR story drawing on: {s}" for s in stories] or
                    ["Add confirmed employment or projects to your profile to get story prompts."],
+        "project_questions": project_questions[:15],
         "questions_to_ask": ["What does success look like in the first 90 days?", "How is the team structured and how does work get prioritised?",
                              "What does the development and release process look like?", "What are the next steps in the process?"],
         "notes": ["Topics are general preparation for this stage and the job's stated skills. JobPilot has no "

@@ -19,6 +19,25 @@ from jobpilot.services import audit, settings_store
 from jobpilot.services.skills_taxonomy import category_of
 
 
+# Rough, generic estimates by skill category — not a measurement of you. Effort: 1 = days, 2 = weeks, 3 = months.
+EFFORT = {"language": 3, "ml": 3, "framework": 2, "concept": 2, "database": 2, "cloud": 2, "devops": 2, "library": 1,
+          "tool": 1, "testing": 1, "process": 1}
+EFFORT_LABELS = {1: "days", 2: "weeks", 3: "months"}
+# How often the category comes up in technical interviews for software roles (2 = often, 1 = sometimes, 0.5 = rarely).
+INTERVIEW = {"language": 2, "concept": 2, "database": 2, "framework": 1.5, "testing": 1, "ml": 1.5, "cloud": 1,
+             "devops": 1, "library": 0.5, "tool": 0.5, "process": 0.5}
+INTERVIEW_CORE = {"data structures", "algorithms", "sql", "oop", "rest api", "multithreading", "system design"}
+
+
+def _checklist_fields(skill: str, priority: float) -> dict:
+    cat = category_of(skill)
+    effort = EFFORT.get(cat or "", 2)
+    interview = 2.0 if skill in INTERVIEW_CORE else INTERVIEW.get(cat or "", 1)
+    label = "high" if interview >= 2 else "medium" if interview >= 1 else "low"
+    return {"effort": EFFORT_LABELS[effort], "interview_relevance": label,
+            "checklist_score": round(priority * interview / effort, 2)}
+
+
 def analyze(session: Session, scope: str = "relevant", category: str | None = None) -> dict:
     threshold = settings_store.get(session, "matching")["relevance_threshold"]
     stmt = select(Job).where(Job.status == "active", Job.match_details.is_not(None))
@@ -54,8 +73,9 @@ def analyze(session: Session, scope: str = "relevant", category: str | None = No
         rows.append({"skill": skill, "category": category_of(skill), "status": status, "mandatory": st["mandatory"],
                      "preferred": st["preferred"], "jobs": count, "share": round(count / len(jobs), 2) if jobs else None,
                      "priority": priority, "examples": st["jobs"], "role_categories": sorted(st["categories"]),
-                     "backlog": backlog.get(skill)})
-    gaps = sorted([r for r in rows if r["status"] != "confirmed"], key=lambda r: -r["priority"])
+                     "backlog": backlog.get(skill), **_checklist_fields(skill, priority)})
+    # The learning checklist: demand from your relevant jobs, weighted up by interview relevance and down by effort.
+    gaps = sorted([r for r in rows if r["status"] != "confirmed"], key=lambda r: (-r["checklist_score"], -r["priority"]))
     strengths = sorted([r for r in rows if r["status"] == "confirmed"], key=lambda r: -r["jobs"])
     return {"jobs_analyzed": len(jobs), "scope": scope, "gaps": gaps, "strengths": strengths}
 

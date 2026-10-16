@@ -53,7 +53,7 @@ def detail(app_id: int, request: Request, db: Session = Depends(get_db)):
                   approved_versions=approved, duplicates=apps.find_duplicates(db, app.job, exclude_id=app.id),
                   manual=manual_fields(db), site=site_for(app.apply_url),
                   browser_enabled=settings.browser_enabled, confirmation_kinds=sorted(apps.CONFIRMATION_KINDS),
-                  evidence_kinds=sorted(apps.EVIDENCE_KINDS))
+                  evidence_kinds=sorted(apps.EVIDENCE_KINDS), next_step=apps.next_action(db, app))
 
 
 @router.post("/applications/{app_id:int}/status")

@@ -161,11 +161,19 @@ def prepare_snapshot(session: Session, app: Application) -> dict[str, Any]:
     for e in session.scalars(select(Employment).where(Employment.status == "confirmed")):
         hits = sorted(job_skills & set(extract_skills(f"{e.title}\n{e.description or ''}")))
         if hits:
-            experience.append({"kind": "work", "label": f"{e.title} at {e.company}", "skills": hits})
+            kind = "work" + (f" ({e.role_type.replace('_', ' ')})" if e.role_type else " (kind of work not recorded)")
+            experience.append({"kind": kind, "label": f"{e.title} at {e.company}", "skills": hits})
     for pr in session.scalars(select(Project).where(Project.status == "confirmed")):
         hits = sorted(job_skills & set(extract_skills(f"{pr.name}\n{pr.description or ''}\n{', '.join(pr.technologies or [])}")))
         if hits:
-            experience.append({"kind": "personal project", "label": pr.name, "skills": hits})
+            kind = {"personal": "personal project", "academic": "academic project",
+                    "learning_exercise": "learning exercise", "open_source": "open-source contribution"}.get(
+                        pr.kind or "personal", "personal project")
+            experience.append({"kind": kind + " (not work experience)", "label": pr.name, "skills": hits})
+    claims = resume_svc.claim_check(session, version.extracted_text) if version else None
+    if claims:
+        claims = {"contradictions": claims["contradictions"], "metrics": len(claims["metrics"]),
+                  "unconfirmed_job_skills": sorted(job_skills & set(claims["unconfirmed_skills"]))}
     contact_ids = set(session.scalars(select(ContactJob.contact_id).where(ContactJob.job_id == job.id)))
     contacts = [c for c in session.scalars(select(Contact).where(
         (Contact.id.in_(contact_ids)) | (Contact.job_id == job.id) |
@@ -189,7 +197,8 @@ def prepare_snapshot(session: Session, app: Application) -> dict[str, Any]:
                                   "explanation": c["explanation"]} for c in rel.get("components", [])]},
         "resume": {"version_id": version.id if version else None, "label": version.label if version else None,
                    "selected_by": app.resume_selection_reason, "suggested_version_id": sel["version"].id if sel["version"] else None,
-                   "warnings": sel["warnings"], "missing": sel["missing"]},
+                   "warnings": sel["warnings"], "missing": sel["missing"], "claims": claims},
+        "deadline": job_deadline(job),
         "facts": {"skills_matched": sk.get("have") or [], "skills_unverified": sk.get("unverified") or [],
                   "skills_missing": sk.get("missing_mandatory") or [], "experience": experience},
         "missing": {"profile": m.get("missing_profile_info") or [], "job": m.get("missing_job_info") or [],
@@ -204,9 +213,52 @@ def prepare_snapshot(session: Session, app: Application) -> dict[str, Any]:
         "checklist": compute_checklist(session, app),
         "review_status": app.status,
     }
+    snap["next_action"] = next_action(session, app, snap)
     app.preparation, app.prepared_at = snap, utcnow()
     audit.record(session, "application.prepared", "application", app.id)
     return snap
+
+
+def job_deadline(job: Job) -> dict[str, Any] | None:
+    """The posting's stated deadline, only from the source's structured field or an explicit sentence. Never guessed."""
+    if job.valid_through:
+        return {"date": job.valid_through.date().isoformat(), "basis": (job.raw or {}).get("deadline_source") or "source data"}
+    ev = ((job.match_details or {}).get("requirements") or {}).get("evidence", {}).get("deadline") or {}
+    if ev.get("basis") == "explicit" and ev.get("value"):
+        return {"date": ev["value"], "basis": f"stated in the posting (“{(ev.get('snippet') or '')[:120]}”)"}
+    return None
+
+
+def next_action(session: Session, app: Application, snap: dict[str, Any] | None = None) -> str:
+    """The single most useful next step for this application. Read-only."""
+    from jobpilot.services import answers as answer_svc
+
+    if app.status in OPEN_STATES and app.job.status != "active":
+        return (f"The listing is {app.job.status}: check the posting is still open before continuing, or withdraw. "
+                "(An expired listing is not a rejection.)")
+    if app.status in ("discovered", "shortlisted"):
+        return "Start preparing: this selects an approved resume and builds the preparation record."
+    if app.status == "preparing":
+        claims = ((snap or app.preparation or {}).get("resume") or {}).get("claims") or {}
+        if app.resume_version_id is None:
+            return "Choose or approve a resume version for this application."
+        if claims.get("contradictions"):
+            return "Check the resume: it describes work differently from your profile (see Preparation record)."
+        missing = [i["label"] for i in compute_checklist(session, app).values() if i["required"] and not i["done"]]
+        if missing:
+            return "Complete the checklist: " + missing[0]
+        open_q = answer_svc.unanswered_count(session, app)
+        if open_q:
+            return f"Answer and approve {open_q} application question(s)."
+        return "Move to “ready for review”."
+    if app.status == "ready_for_review":
+        if app.submission_approved_at is None:
+            return "Review the prepared application and approve submission."
+        return ("Submit on the employer's site yourself, then add confirmation evidence and record the submission. "
+                "Nothing is submitted for you.")
+    if app.status in ("applied", "assessment", "interview"):
+        return "Wait for the employer; record any reply, assessment or interview. Silence is not a rejection."
+    return "No action needed."
 
 
 def refresh_checklist(session: Session, app: Application) -> dict[str, Any]:

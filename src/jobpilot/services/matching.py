@@ -542,3 +542,32 @@ def rematch_all(session: Session) -> int:
         match_job(session, job)
         n += 1
     return n
+
+
+# Actions that change what a job's score depends on: your profile, skills, preferences and matching settings.
+_SCORE_INPUT_ACTIONS = ("profile.%", "fact.%", "learning.%", "settings.%")
+
+
+def inputs_changed_at(session: Session):
+    """When anything a score depends on last changed (from the audit log), or None."""
+    from sqlalchemy import func, or_
+
+    from jobpilot.models import AuditLog
+
+    return session.scalar(select(func.max(AuditLog.ts)).where(or_(*[AuditLog.action.like(a) for a in _SCORE_INPUT_ACTIONS])))
+
+
+def rematch_stale(session: Session, limit: int = 2000) -> int:
+    """Re-score active jobs that are unscored or were scored before your profile/settings last changed.
+
+    Unchanged jobs keep their score, so ranking stays stable between runs. Bounded per run.
+    """
+    changed = inputs_changed_at(session)
+    cond = Job.matched_at.is_(None)
+    if changed is not None:
+        cond = cond | (Job.matched_at < changed)
+    n = 0
+    for job in session.scalars(select(Job).where(Job.status == "active", cond).order_by(Job.id).limit(limit)):
+        match_job(session, job)
+        n += 1
+    return n

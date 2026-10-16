@@ -97,6 +97,41 @@ def cmd_db(args) -> int:
     return 0
 
 
+def cmd_doctor(args) -> int:
+    """Read-only diagnostics: never migrates, creates or changes anything."""
+    import socket
+
+    settings, engine, factory = _ctx(run_migrations=False)
+    from jobpilot.db import current_revision, head_revision
+    from jobpilot.services import health
+
+    env = env_file_path()
+    current, head = current_revision(engine), head_revision(settings)
+    print(f"Config file:    {env.resolve() if env else '(none; using environment/defaults)'}")
+    print(f"Data directory: {settings.data_path}")
+    print(f"Database:       {settings.db_file}")
+    print(f"Schema:         {current} (head {head})"
+          + ("  — migration pending: `jobpilot serve` or `jobpilot db upgrade` applies it after a backup"
+             if current != head else ""))
+    with socket.socket() as sock:
+        sock.settimeout(0.5)
+        running = sock.connect_ex((settings.host, settings.port)) == 0
+    print(f"Server:         " + (f"something is listening on http://{settings.host}:{settings.port} (open it to check it "
+                                  "is JobPilot with this data directory)" if running else
+                                  f"not running (start: jobpilot serve → http://{settings.host}:{settings.port})"))
+    ok = True
+    if current != head:
+        print("Checks:         skipped until the schema is up to date")
+    else:
+        with factory() as session:
+            result = health.check(settings, session, deep=True)
+        for name, c in result["checks"].items():
+            print(f"  [{'ok' if c['ok'] else 'FAIL'}] {name}: {c['detail']}")
+        ok = result["ok"]
+    engine.dispose()
+    return 0 if ok else 1
+
+
 def cmd_backup(args) -> int:
     from jobpilot.services import backup
 
@@ -136,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("db", help="Apply migrations and show schema revision")
     s.add_argument("action", choices=["upgrade", "current"])
     s.set_defaults(func=cmd_db)
+
+    sub.add_parser("doctor", help="Read-only diagnostics (paths, schema, health, integrity)").set_defaults(
+        func=cmd_doctor)
 
     s = sub.add_parser("backup", help="Create, list or restore backups")
     s.add_argument("action", choices=["create", "list", "restore"])

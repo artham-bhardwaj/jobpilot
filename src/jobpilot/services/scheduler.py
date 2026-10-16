@@ -77,12 +77,45 @@ def _gmail_sync(settings: Settings) -> Callable[[Session], dict]:
     return run
 
 
+def _rematch(settings: Settings) -> Callable[[Session], dict]:
+    def run(s: Session) -> dict:
+        from jobpilot.services import matching
+
+        n = matching.rematch_stale(s)
+        return {"message": f"{n} job score(s) updated (unscored, or scored before your profile/settings changed)",
+                "rescored": n}
+    return run
+
+
+def _reminders(settings: Settings) -> Callable[[Session], dict]:
+    def run(s: Session) -> dict:
+        from jobpilot.services import reminders
+
+        return reminders.check(s)
+    return run
+
+
+def _health_check(settings: Settings) -> Callable[[Session], dict]:
+    def run(s: Session) -> dict:
+        from jobpilot.services import health
+
+        res = health.check(settings, s, deep=True)
+        bad = [f"{k}: {v['detail']}" for k, v in res["checks"].items() if not v["ok"]]
+        if bad:
+            raise RuntimeError("health check failed — " + "; ".join(bad))
+        return {"message": "all checks passed (" + res["checks"]["integrity"]["detail"] + " integrity)"}
+    return run
+
+
 TASK_LABELS = {
     "collect_jobs": "Job collection (enabled sources)",
     "followup_check": "Follow-up eligibility check (never sends)",
     "maintenance": "Job expiry check (stated closing dates; no fetching)",
     "backup": "Database backup",
     "gmail_sync": "Gmail reply sync (only after you authorise Gmail; read-only)",
+    "rematch": "Score updates (only unscored jobs, or jobs scored before your profile changed)",
+    "reminders": "Deadline and application-status reminders (review items only; never sends)",
+    "health_check": "System health and database integrity check",
 }
 
 TASKS: dict[str, Callable[[Settings], Callable[[Session], dict]]] = {
@@ -91,7 +124,13 @@ TASKS: dict[str, Callable[[Settings], Callable[[Session], dict]]] = {
     "maintenance": _maintenance,
     "backup": _backup,
     "gmail_sync": _gmail_sync,
+    "rematch": _rematch,
+    "reminders": _reminders,
+    "health_check": _health_check,
 }
+# After a failed run, wait before trying again: 15 min, 30 min, 1 h, ... capped at the task's own interval.
+# Stops a task whose source is down from being retried on every scheduler pass.
+BACKOFF_BASE_MINUTES = 15
 
 
 def last_success(session: Session, name: str):
@@ -114,6 +153,19 @@ def next_runs(session: Session) -> dict[str, Any]:
     return out
 
 
+def backoff_until(session: Session, name: str, every_hours: float):
+    """If the task's recent runs failed, the earliest time to retry it; otherwise None."""
+    last_ok = last_success(session, name)
+    stmt = select(TaskRun).where(TaskRun.task_name == name, TaskRun.status == "failed")
+    if last_ok is not None:
+        stmt = stmt.where(TaskRun.started_at > last_ok)
+    failures = list(session.scalars(stmt.order_by(TaskRun.started_at.desc()).limit(10)))
+    if not failures:
+        return None
+    wait = min(timedelta(minutes=BACKOFF_BASE_MINUTES * 2 ** (len(failures) - 1)), timedelta(hours=every_hours))
+    return (failures[0].finished_at or failures[0].started_at) + wait
+
+
 def due_tasks(session: Session) -> list[str]:
     cfg = settings_store.get(session, "scheduler")
     now = utcnow()
@@ -122,9 +174,12 @@ def due_tasks(session: Session) -> list[str]:
         tcfg = cfg.get("tasks", {}).get(name) or {}
         if not tcfg.get("enabled"):
             continue
+        every = float(tcfg.get("every_hours", 24))
         last = last_success(session, name)
-        if last is None or now - last >= timedelta(hours=float(tcfg.get("every_hours", 24))):
-            out.append(name)
+        if last is None or now - last >= timedelta(hours=every):
+            retry_at = backoff_until(session, name, every)
+            if retry_at is None or now >= retry_at:
+                out.append(name)
     return out
 
 

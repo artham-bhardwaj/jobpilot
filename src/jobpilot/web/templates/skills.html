@@ -15,15 +15,18 @@ skill is required (×2) or preferred (×1) by how relevant those jobs are.</p>
 </form>
 
 <section class="card">
-  <h2>Recurring gaps <span class="muted small">across {{ r.jobs_analyzed }} job(s)</span></h2>
+  <h2>Learning checklist <span class="muted small">gaps across {{ r.jobs_analyzed }} job(s)</span></h2>
+  <p class="muted small">Ordered by demand in your relevant jobs, weighted up for interview relevance and down for
+  effort. Effort and interview relevance are generic estimates for the skill's category, not an assessment of you.
+  Progress here never confirms a skill: only you do, with evidence.</p>
   {% if r.jobs_analyzed == 0 %}{{ empty("No jobs in scope yet. Collect and score some jobs first.") }}
   {% elif r.gaps %}
   <div class="table-wrap"><table class="table">
-    <thead><tr><th>Skill</th><th>Your status</th><th>Required in</th><th>Preferred in</th><th>Share of jobs</th><th>Priority</th><th>Examples</th><th></th></tr></thead>
+    <thead><tr><th>Skill</th><th>Your status</th><th>Required in</th><th>Preferred in</th><th>Share of jobs</th><th>Demand</th><th>Effort <span class="muted small">(rough)</span></th><th>Interview relevance</th><th>Examples</th><th></th></tr></thead>
     {% for g in r.gaps[:40] %}<tr>
       <td><b>{{ g.skill }}</b><div class="muted small">{{ g.category or "" }}</div></td>
       <td>{{ badge(g.status) }}</td><td>{{ g.mandatory }}</td><td>{{ g.preferred }}</td>
-      <td>{{ g.share|pct }}</td><td>{{ g.priority }}</td>
+      <td>{{ g.share|pct }}</td><td>{{ g.priority }}</td><td>{{ g.effort }}</td><td>{{ g.interview_relevance }}</td>
       <td class="small">{% for jid, title, comp in g.examples[:3] %}<a href="/jobs/{{ jid }}">{{ title }}</a>{% if comp %} ({{ comp }}){% endif %}<br>{% endfor %}</td>
       <td>{% if g.backlog %}{{ badge(g.backlog.status) }}{% else %}<form method="post" action="/skills/backlog" class="inline"><input type="hidden" name="skill" value="{{ g.skill }}"><input type="hidden" name="priority" value="{{ g.priority }}"><button class="small">add to backlog</button></form>{% endif %}</td>
     </tr>{% endfor %}

@@ -191,7 +191,17 @@ def test_failing_scheduled_task_is_recorded_and_retried(app, settings, db, monke
     monkeypatch.setattr("jobpilot.services.tasks.time.sleep", lambda s: None)
     assert scheduler.run_due(settings, app.state.sessionmaker) == {"maintenance": "failed"}
     assert calls["n"] == 2, "one retry"
-    assert "maintenance" in scheduler.due_tasks(db), "failed tasks stay due"
+    # A failed task stays due, but only after a backoff (15 min after the first failure), not on every pass.
+    assert "maintenance" not in scheduler.due_tasks(db), "backing off right after a failure"
+    from datetime import timedelta
+
+    from jobpilot.models import TaskRun
+
+    for run in db.scalars(__import__("sqlalchemy").select(TaskRun)):
+        run.started_at -= timedelta(minutes=16)
+        run.finished_at = run.finished_at and run.finished_at - timedelta(minutes=16)
+    db.flush()
+    assert "maintenance" in scheduler.due_tasks(db), "failed tasks stay due once the backoff has passed"
 
 
 # ---- Gmail (mocked Google endpoints) -------------------------------------------------------

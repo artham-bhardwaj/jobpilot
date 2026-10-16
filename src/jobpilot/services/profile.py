@@ -16,13 +16,17 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jobpilot.models import CandidateProfile, Education, Employment, ProfileLink, Project, Skill, utcnow
+from jobpilot.models import (Achievement, CandidateProfile, Certification, Education, Employment, ProfileLink, Project,
+                             Skill, utcnow)
+from jobpilot.models.profile import FACT_STATUSES, PROJECT_KINDS, ROLE_TYPES, SKILL_STATUSES
 from jobpilot.services import audit
 from jobpilot.services.skills_taxonomy import canonical, category_of
 
 EMAIL_PATTERN = r"^[^@\s<>]+@[^@\s<>]+\.[A-Za-z]{2,}$"
-FactStatus = Literal["confirmed", "unverified"]
-SkillStatus = Literal["confirmed", "learning", "unverified"]
+FactStatus = Literal["confirmed", "unverified", "outdated"]
+SkillStatus = Literal["confirmed", "learning", "unverified", "outdated"]
+RoleType = Literal["software_development", "testing_qa", "data", "devops_infra", "support", "other"]
+ProjectKind = Literal["personal", "academic", "learning_exercise", "open_source"]
 
 
 def _split_list(v: Any) -> Any:
@@ -54,8 +58,10 @@ class ProfileIn(_In):
     willing_to_relocate: bool | None = None
     acceptable_locations: list[str] | None = None
     remote_preferences: list[Literal["remote", "hybrid", "onsite"]] | None = None
+    preferred_titles: list[str] | None = None
+    job_search_priorities: str | None = Field(default=None, max_length=2000)
 
-    _lists = field_validator("acceptable_locations", "remote_preferences", mode="before")(_split_list)
+    _lists = field_validator("acceptable_locations", "remote_preferences", "preferred_titles", mode="before")(_split_list)
 
     @field_validator("needs_sponsorship", "willing_to_relocate", mode="before")
     @classmethod
@@ -89,6 +95,7 @@ class EmploymentIn(_In):
     title: str = Field(min_length=1, max_length=200)
     location: str | None = Field(default=None, max_length=200)
     employment_type: Literal["full_time", "part_time", "internship", "contract", "freelance"] | None = None
+    role_type: RoleType | None = None
     start_date: date | None = None
     end_date: date | None = None
     description: str | None = Field(default=None, max_length=5000)
@@ -101,12 +108,32 @@ class ProjectIn(_In):
     description: str | None = Field(default=None, max_length=5000)
     url: HttpUrl | None = None
     technologies: list[str] | None = None
+    kind: ProjectKind = "personal"
     start_date: date | None = None
     end_date: date | None = None
     status: FactStatus = "unverified"
     source: str | None = Field(default="manual entry", max_length=200)
 
     _lists = field_validator("technologies", mode="before")(_split_list)
+
+
+class CertificationIn(_In):
+    name: str = Field(min_length=1, max_length=200)
+    issuer: str | None = Field(default=None, max_length=200)
+    issued_on: date | None = None
+    expires_on: date | None = None
+    credential_url: HttpUrl | None = None
+    status: FactStatus = "unverified"
+    source: str | None = Field(default="manual entry", max_length=200)
+
+
+class AchievementIn(_In):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    context: Literal["work", "academic", "project", "other"] = "other"
+    achieved_on: date | None = None
+    status: FactStatus = "unverified"
+    source: str | None = Field(default="manual entry", max_length=200)
 
 
 class SkillIn(_In):
@@ -124,6 +151,8 @@ FACT_MODELS: dict[str, tuple[type, type[_In]]] = {
     "employment": (Employment, EmploymentIn),
     "projects": (Project, ProjectIn),
     "skills": (Skill, SkillIn),
+    "certifications": (Certification, CertificationIn),
+    "achievements": (Achievement, AchievementIn),
 }
 
 
@@ -209,7 +238,7 @@ def save_fact(session: Session, kind: str, data: _In, fact_id: int | None = None
 
 def set_fact_status(session: Session, kind: str, fact_id: int, status: str):
     model, _ = FACT_MODELS[kind]
-    allowed = ("confirmed", "learning", "unverified") if kind == "skills" else ("confirmed", "unverified")
+    allowed = SKILL_STATUSES if kind == "skills" else FACT_STATUSES
     if status not in allowed:
         raise ValueError(f"Invalid status {status!r}")
     obj = session.get(model, fact_id)
@@ -280,6 +309,27 @@ def experience_years(session: Session) -> tuple[float | None, str]:
     return round(days / 365.25, 1), f"computed from {len(full)} confirmed role(s)"
 
 
+DEVELOPMENT_ROLE = "software_development"
+
+
+def experience_breakdown(session: Session) -> dict[str, Any]:
+    """Years in confirmed, dated, non-internship roles, split by the kind of work you recorded for each role.
+
+    Only roles you marked "software development" count as development experience; testing/QA and other work is
+    real experience but is never presented as development. Roles without a recorded kind are reported, not guessed.
+    """
+    roles = [j for j in session.scalars(select(Employment).where(Employment.status == "confirmed"))
+             if j.employment_type != "internship" and j.start_date]
+    by_type: dict[str, float] = {}
+    for j in roles:
+        years = max(0, ((j.end_date or date.today()) - j.start_date).days) / 365.25
+        key = j.role_type or "not_recorded"
+        by_type[key] = by_type.get(key, 0.0) + years
+    return {"by_type": {k: round(v, 1) for k, v in sorted(by_type.items())},
+            "development": round(by_type.get(DEVELOPMENT_ROLE, 0.0), 1),
+            "not_recorded": sum(1 for j in roles if not j.role_type), "roles": len(roles)}
+
+
 def completeness(session: Session) -> dict:
     p = get_profile(session)
     checks = {
@@ -297,8 +347,9 @@ def completeness(session: Session) -> dict:
 def skill_profile(session: Session) -> dict[str, dict]:
     """Every recorded skill with its status and where it is evidenced in *confirmed* facts.
 
-    ``work`` lists confirmed roles whose title/description mention the skill (internships labelled);
-    ``projects`` lists confirmed personal projects. Nothing is inferred beyond those texts.
+    ``work`` lists confirmed roles whose title/description mention the skill (internships and the kind of work
+    labelled); ``projects`` lists confirmed personal projects and ``non_work`` academic work, learning exercises and
+    open-source contributions. None of the project evidence is work experience. Nothing is inferred beyond those texts.
     """
     from jobpilot.services.skills_taxonomy import extract_skills
 
@@ -311,7 +362,10 @@ def skill_profile(session: Session) -> dict[str, dict]:
     for sk in session.scalars(select(Skill)):
         name = sk.normalized_name
         work = [f"{j.title} at {j.company}" + (" (internship)" if j.employment_type == "internship" else "")
+                + (f" [{j.role_type.replace('_', ' ')}]" if j.role_type else "")
                 for j in jobs if name in job_skills[j.id]]
-        projs = [p.name for p in projects if name in proj_skills[p.id]]
-        out[name] = {"status": sk.status, "work": work, "projects": projs, "years": sk.years}
+        projs = [p.name for p in projects if name in proj_skills[p.id] and (p.kind or "personal") == "personal"]
+        non_work = [f"{p.name} ({p.kind.replace('_', ' ')})" for p in projects
+                    if name in proj_skills[p.id] and (p.kind or "personal") != "personal"]
+        out[name] = {"status": sk.status, "work": work, "projects": projs, "non_work": non_work, "years": sk.years}
     return out

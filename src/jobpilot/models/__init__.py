@@ -22,7 +22,9 @@ from jobpilot.models.outreach import (
     EmailTemplate,
 )
 from jobpilot.models.profile import (
+    Achievement,
     CandidateProfile,
+    Certification,
     Education,
     Employment,
     ProfileLink,
@@ -34,7 +36,7 @@ from jobpilot.models.system import AppSetting, AuditLog, TaskRun
 
 __all__ = [
     "Base", "utcnow", "AppSetting", "AuditLog", "TaskRun",
-    "CandidateProfile", "Education", "Employment", "ProfileLink", "Project", "Skill",
+    "CandidateProfile", "Education", "Employment", "ProfileLink", "Project", "Skill", "Certification", "Achievement",
     "Resume", "ResumeVersion",
     "Company", "Job", "JobSighting", "JobSource",
     "Contact", "ContactInteraction", "DoNotContact", "EmailDraft", "EmailTemplate",

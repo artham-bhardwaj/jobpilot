@@ -17,6 +17,7 @@ Three independent results are produced for each job, all from deterministic rule
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -167,6 +168,17 @@ def _structured_from_job(job: Job) -> dict[str, Any]:
     return {k: v for k, v in values.items() if k in keys and v not in (None, "")}
 
 
+_TEST_ROLE = re.compile(r"\b(qa|quality assurance|test(?:ing|er)?|sdet|automation engineer|verification)\b", re.I)
+_DEV_ROLE = re.compile(r"\b(software|backend|back-end|frontend|front-end|full[- ]?stack|developer|programmer|sde|swe|"
+                       r"engineer)\b", re.I)
+
+
+def is_development_role(title: str | None) -> bool:
+    """A software-development posting (not a testing/QA one), judged from the title only."""
+    t = title or ""
+    return bool(_DEV_ROLE.search(t)) and not _TEST_ROLE.search(t)
+
+
 def _candidate_skill_note(name: str, info: dict | None) -> str:
     if not info:
         return "not in your profile"
@@ -179,6 +191,8 @@ def _candidate_skill_note(name: str, info: dict | None) -> str:
         where.append("work: " + "; ".join(info["work"][:2]))
     if info["projects"]:
         where.append("personal projects: " + "; ".join(info["projects"][:2]))
+    if info.get("non_work"):
+        where.append("academic/learning (not work): " + "; ".join(info["non_work"][:2]))
     return "confirmed" + (f" ({' | '.join(where)})" if where else " (no linked role or project)")
 
 
@@ -343,6 +357,9 @@ def evaluate(session: Session, job: Job, weights: dict[str, float] | None = None
     # --- Eligibility ---------------------------------------------------------------------------
     checks: list[dict] = []
     gap_limit = hard_cfg["experience_gap_years"]
+    breakdown = profile_svc.experience_breakdown(session)
+    dev_years = breakdown["development"]
+    dev_role = is_development_role(job.title)
     if req_min is None:
         checks.append({"name": "experience", "status": "unknown", "key": True,
                        "explanation": "years of experience required are not stated"})
@@ -350,6 +367,17 @@ def evaluate(session: Session, job: Job, weights: dict[str, float] | None = None
         checks.append({"name": "experience", "status": "unknown", "key": True,
                        "explanation": f"requires {req_min:g}+ years; your work experience is unknown ({years_src})"})
         missing_profile.append("total work experience")
+    elif cand_years >= req_min and dev_role and dev_years < req_min:
+        # Enough years overall, but not in development roles: never present testing/other work as development.
+        split = ", ".join(f"{v:g} {k.replace('_', ' ')}" for k, v in breakdown["by_type"].items())
+        note = (f"; kind of work not recorded for {breakdown['not_recorded']} role(s) — set it on your profile"
+                if breakdown["not_recorded"] else "")
+        checks.append({"name": "experience", "status": "warn", "key": True,
+                       "explanation": f"requires {req_min:g}+ years for a development role; you have {cand_years:g} years "
+                                      f"of work experience, of which {dev_years:g} in software development roles "
+                                      f"({split}){note}. Check whether your experience fits before applying."})
+        if breakdown["not_recorded"]:
+            missing_profile.append("kind of work for each role (development / testing / other)")
     elif cand_years >= req_min:
         checks.append({"name": "experience", "status": "pass", "key": True,
                        "explanation": f"requires {req_min:g}+ years; you have {cand_years:g} years of work experience "

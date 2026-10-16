@@ -44,17 +44,20 @@ def _schema5_db(tmp_path):
 
 
 def test_db_current_reports_pending_migration_without_applying_it(tmp_path):
+    from jobpilot.db import head_revision
+
     settings = _schema5_db(tmp_path)
+    head = head_revision(settings)
     r = _cli(tmp_path, "db", "current")
     assert r.returncode == 0, r.stderr[-500:]
-    assert json.loads(r.stdout) == {"current": "0005", "head": "0006", "pending": True}
+    assert json.loads(r.stdout) == {"current": "0005", "head": head, "pending": True}
     con = sqlite3.connect(settings.db_file)
     assert con.execute("select version_num from alembic_version").fetchone()[0] == "0005"
     con.close()
     assert not list(settings.backup_dir.glob("*.zip"))
 
     r = _cli(tmp_path, "db", "upgrade")
-    assert r.returncode == 0 and json.loads(r.stdout) == {"current": "0006", "head": "0006", "pending": False}
+    assert r.returncode == 0 and json.loads(r.stdout) == {"current": head, "head": head, "pending": False}
     assert len(list(settings.backup_dir.glob("*pre-migrate-0005*.zip"))) == 1
     con = sqlite3.connect(settings.db_file)
     assert con.execute("select title from jobs").fetchall() == [("Legacy Role",)]

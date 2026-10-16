@@ -11,14 +11,21 @@ from jobpilot.web.deps import first_error, form_dict, get_db, get_or_404, redire
 
 router = APIRouter(prefix="/profile")
 
-FACT_STATUS = [("unverified", "unverified"), ("confirmed", "confirmed")]
-SKILL_STATUS = [("unverified", "unverified"), ("learning", "learning"), ("confirmed", "confirmed")]
+FACT_STATUS = [("unverified", "unverified"), ("confirmed", "confirmed"), ("outdated", "outdated / rejected")]
+SKILL_STATUS = [("unverified", "unverified"), ("learning", "learning"), ("confirmed", "confirmed"),
+                ("outdated", "outdated / rejected")]
+ROLE_TYPES = [("", "not recorded"), ("software_development", "software development"), ("testing_qa", "testing / QA"),
+              ("data", "data / analytics"), ("devops_infra", "DevOps / infrastructure"), ("support", "support / operations"),
+              ("other", "other")]
+PROJECT_KINDS = [("personal", "personal project"), ("academic", "academic / coursework"),
+                 ("learning_exercise", "learning exercise / tutorial"), ("open_source", "open-source contribution")]
 
 # Field specs used to render add/edit forms: (name, label, type, options)
 FACT_FIELDS = {
     "employment": [("company", "Company *", "text", None), ("title", "Title *", "text", None),
                    ("location", "Location", "text", None),
                    ("employment_type", "Type", "select", ["", "full_time", "part_time", "internship", "contract", "freelance"]),
+                   ("role_type", "Kind of work (only software development counts as development experience)", "select", ROLE_TYPES),
                    ("start_date", "Start date", "date", None), ("end_date", "End date (blank = current)", "date", None),
                    ("description", "Description / achievements (one per line)", "textarea", None),
                    ("status", "Status", "select", FACT_STATUS), ("source", "Source", "text", None)],
@@ -27,7 +34,8 @@ FACT_FIELDS = {
                   ("end_date", "End", "date", None), ("grade", "Grade", "text", None),
                   ("notes", "Notes", "textarea", None), ("status", "Status", "select", FACT_STATUS),
                   ("source", "Source", "text", None)],
-    "projects": [("name", "Name *", "text", None), ("url", "URL", "url", None),
+    "projects": [("name", "Name *", "text", None), ("kind", "Kind (never counted as work experience)", "select", PROJECT_KINDS),
+                 ("url", "URL", "url", None),
                  ("technologies", "Technologies (comma separated)", "text", None),
                  ("start_date", "Start", "date", None), ("end_date", "End", "date", None),
                  ("description", "Description (one point per line)", "textarea", None),
@@ -35,10 +43,21 @@ FACT_FIELDS = {
     "skills": [("name", "Skill *", "text", None), ("category", "Category", "text", None),
                ("years", "Years used", "number", None), ("evidence", "Evidence (where you used it)", "textarea", None),
                ("status", "Status", "select", SKILL_STATUS), ("source", "Source", "text", None)],
+    "certifications": [("name", "Certification *", "text", None), ("issuer", "Issuer", "text", None),
+                       ("issued_on", "Issued", "date", None), ("expires_on", "Expires", "date", None),
+                       ("credential_url", "Credential URL", "url", None),
+                       ("status", "Status", "select", FACT_STATUS), ("source", "Source", "text", None)],
+    "achievements": [("title", "Achievement *", "text", None),
+                     ("context", "Where (keeps work and non-work achievements apart)", "select",
+                      [("work", "at work"), ("academic", "academic"), ("project", "personal project"), ("other", "other")]),
+                     ("achieved_on", "Date", "date", None),
+                     ("description", "Details (only what you can back up — no estimated metrics)", "textarea", None),
+                     ("status", "Status", "select", FACT_STATUS), ("source", "Source", "text", None)],
     "links": [("label", "Label *", "text", None), ("url", "URL *", "url", None)],
 }
 KIND_LABELS = {"employment": "Employment", "education": "Education", "projects": "Projects", "skills": "Skills",
-               "links": "Links"}
+               "certifications": "Certifications", "achievements": "Achievements", "links": "Links"}
+SECTION_ORDER = ["skills", "employment", "education", "projects", "certifications", "achievements", "links"]
 
 
 def _check_kind(kind: str) -> None:
@@ -49,10 +68,11 @@ def _check_kind(kind: str) -> None:
 
 @router.get("")
 def profile_page(request: Request, db: Session = Depends(get_db)):
-    facts = {k: ps.list_facts(db, k) for k in ("employment", "education", "projects", "skills", "links")}
+    facts = {k: ps.list_facts(db, k) for k in SECTION_ORDER}
     years, years_src = ps.experience_years(db)
     return render(request, "profile.html", profile=ps.get_profile(db), facts=facts, fields=FACT_FIELDS,
-                  labels=KIND_LABELS, completeness=ps.completeness(db), years=years, years_src=years_src)
+                  labels=KIND_LABELS, sections=SECTION_ORDER, completeness=ps.completeness(db), years=years,
+                  years_src=years_src, experience=ps.experience_breakdown(db))
 
 
 @router.post("")

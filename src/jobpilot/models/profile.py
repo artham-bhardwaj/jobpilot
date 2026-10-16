@@ -16,8 +16,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from jobpilot.models.base import Base, TimestampMixin
 
-FACT_STATUSES = ("confirmed", "unverified")
-SKILL_STATUSES = ("confirmed", "learning", "unverified")
+# "outdated" = no longer accurate or rejected by you: kept for history, never used.
+FACT_STATUSES = ("confirmed", "unverified", "outdated")
+SKILL_STATUSES = ("confirmed", "learning", "unverified", "outdated")
+# What kind of work a role was. Only "software_development" years count as development experience.
+ROLE_TYPES = ("software_development", "testing_qa", "data", "devops_infra", "support", "other")
+# Projects are never professional experience; this says what kind of non-professional work it was.
+PROJECT_KINDS = ("personal", "academic", "learning_exercise", "open_source")
 
 
 class CandidateProfile(TimestampMixin, Base):
@@ -44,6 +49,8 @@ class CandidateProfile(TimestampMixin, Base):
     willing_to_relocate: Mapped[bool | None] = mapped_column()
     acceptable_locations: Mapped[list[Any] | None] = mapped_column(JSON)
     remote_preferences: Mapped[list[Any] | None] = mapped_column(JSON)
+    preferred_titles: Mapped[list[Any] | None] = mapped_column(JSON)
+    job_search_priorities: Mapped[str | None] = mapped_column(Text)
     # Whether the core details above have been confirmed by the candidate.
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -81,6 +88,7 @@ class Employment(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200))
     location: Mapped[str | None] = mapped_column(String(200))
     employment_type: Mapped[str | None] = mapped_column(String(50))  # full_time, internship, contract...
+    role_type: Mapped[str | None] = mapped_column(String(30))  # see ROLE_TYPES; None = not recorded
     start_date: Mapped[date | None] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date)  # None = current
     description: Mapped[str | None] = mapped_column(Text)
@@ -97,8 +105,37 @@ class Project(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     url: Mapped[str | None] = mapped_column(String(500))
     technologies: Mapped[list[Any] | None] = mapped_column(JSON)
+    kind: Mapped[str] = mapped_column(String(20), default="personal")  # see PROJECT_KINDS
     start_date: Mapped[date | None] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(20), default="unverified")
+    source: Mapped[str | None] = mapped_column(String(200))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Certification(TimestampMixin, Base):
+    __tablename__ = "certifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    issuer: Mapped[str | None] = mapped_column(String(200))
+    issued_on: Mapped[date | None] = mapped_column(Date)
+    expires_on: Mapped[date | None] = mapped_column(Date)
+    credential_url: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), default="unverified")
+    source: Mapped[str | None] = mapped_column(String(200))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Achievement(TimestampMixin, Base):
+    __tablename__ = "achievements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    # Where it happened, so professional and non-professional achievements are never mixed up.
+    context: Mapped[str] = mapped_column(String(20), default="other")  # work | academic | project | other
+    achieved_on: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(20), default="unverified")
     source: Mapped[str | None] = mapped_column(String(200))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)

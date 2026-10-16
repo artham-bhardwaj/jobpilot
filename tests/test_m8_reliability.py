@@ -95,7 +95,9 @@ def test_backup_restore_preserves_new_tables_and_upgrades_old_backups(app, setti
     target = settings.backup_dir / old_backup.name
     target.write_bytes(old_backup.read_bytes())
     res = backup.restore_backup(settings, target, app.state.engine)
-    assert res["migration"]["from"] == "0005" and res["migration"]["to"] == "0006"
+    from jobpilot.db import head_revision
+
+    assert res["migration"]["from"] == "0005" and res["migration"]["to"] == head_revision(settings)
     con = sqlite3.connect(settings.db_file)
     assert con.execute("select title, miss_count, hard_conflict from jobs").fetchall() == [("Legacy Role", 0, 0)]
     assert con.execute("select count(*) from source_runs").fetchone()[0] == 0

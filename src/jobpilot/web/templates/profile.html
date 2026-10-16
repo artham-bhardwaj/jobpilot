@@ -9,6 +9,7 @@ email drafts and form autofill. Unverified facts (e.g. suggested from a resume) 
 <div class="stats">
   <div class="stat"><div class="v">{{ completeness.score|pct }}</div><div class="l">profile completeness</div></div>
   <div class="stat"><div class="v">{{ years if years is not none else "unknown" }}</div><div class="l">experience (years) — {{ years_src }}</div></div>
+  <div class="stat"><div class="v">{{ experience.development }}</div><div class="l">years in software-development roles{% if experience.by_type %} ({% for k, v in experience.by_type.items() %}{{ v }} {{ k|replace("_", " ") }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}</div></div>
   <div class="stat"><div class="v">{{ facts.skills|selectattr("status","equalto","confirmed")|list|length }}</div><div class="l">confirmed skills</div></div>
   <div class="stat"><div class="v">{{ "yes" if profile.confirmed_at else "no" }}</div><div class="l">details confirmed</div></div>
 </div>
@@ -38,6 +39,8 @@ email drafts and form autofill. Unverified facts (e.g. suggested from a resume) 
       <label class="field"><span>Remote preferences</span>
         <span class="checkbox">{% for opt in ["remote","hybrid","onsite"] %}<label class="checkbox"><input type="checkbox" name="remote_preferences" value="{{ opt }}" {% if opt in (profile.remote_preferences or []) %}checked{% endif %}> {{ opt }}</label>{% endfor %}</span>
       </label>
+      {{ field("preferred_titles", "Preferred job titles (comma separated)", (profile.preferred_titles or [])|join(", ")) }}
+      {{ textarea("job_search_priorities", "Job-search priorities (what matters most to you)", profile.job_search_priorities, rows=2) }}
       {{ textarea("summary", "Professional summary", profile.summary, rows=3) }}
     </div>
     <div class="actions"><button class="primary">Save details</button></div>
@@ -48,7 +51,7 @@ email drafts and form autofill. Unverified facts (e.g. suggested from a resume) 
   </form>
 </section>
 
-{% for kind in ["skills", "employment", "education", "projects", "links"] %}
+{% for kind in sections %}
 <section class="card" id="{{ kind }}">
   <h2>{{ labels[kind] }}</h2>
   {% set rows = facts[kind] %}
@@ -58,21 +61,25 @@ email drafts and form autofill. Unverified facts (e.g. suggested from a resume) 
       {% if kind == "skills" %}<th>Skill</th><th>Category</th><th>Years</th><th>Source</th>
       {% elif kind == "employment" %}<th>Role</th><th>Dates</th><th>Type</th><th>Source</th>
       {% elif kind == "education" %}<th>Institution</th><th>Degree</th><th>Dates</th><th>Source</th>
-      {% elif kind == "projects" %}<th>Project</th><th>Technologies</th><th>Source</th>
+      {% elif kind == "projects" %}<th>Project</th><th>Kind</th><th>Technologies</th><th>Source</th>
+      {% elif kind == "certifications" %}<th>Certification</th><th>Issuer</th><th>Dates</th><th>Source</th>
+      {% elif kind == "achievements" %}<th>Achievement</th><th>Where</th><th>Date</th><th>Source</th>
       {% else %}<th>Label</th><th>URL</th>{% endif %}
       <th>Status</th><th></th></tr></thead>
     <tbody>
     {% for r in rows %}
       <tr>
         {% if kind == "skills" %}<td>{{ r.name }}</td><td>{{ r.category or "" }}</td><td>{{ r.years or "" }}</td><td class="muted small">{{ r.source or "" }}</td>
-        {% elif kind == "employment" %}<td><b>{{ r.title }}</b>, {{ r.company }}</td><td class="nowrap">{{ r.start_date|d }} → {{ r.end_date|d if r.end_date else "present" }}</td><td>{{ r.employment_type or "" }}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% elif kind == "employment" %}<td><b>{{ r.title }}</b>, {{ r.company }}</td><td class="nowrap">{{ r.start_date|d }} → {{ r.end_date|d if r.end_date else "present" }}</td><td>{{ r.employment_type or "" }}{% if r.role_type %} · {{ r.role_type|replace("_", " ") }}{% else %} · <span class="muted">kind of work not recorded</span>{% endif %}</td><td class="muted small">{{ r.source or "" }}</td>
         {% elif kind == "education" %}<td>{{ r.institution }}</td><td>{{ r.degree or "" }} {{ r.field_of_study or "" }}</td><td class="nowrap">{{ r.start_date|d }} → {{ r.end_date|d }}</td><td class="muted small">{{ r.source or "" }}</td>
-        {% elif kind == "projects" %}<td>{{ r.name }}{% if r.url %} · <a href="{{ r.url }}" rel="noopener noreferrer" target="_blank">link</a>{% endif %}</td><td>{{ (r.technologies or [])|join(", ") }}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% elif kind == "projects" %}<td>{{ r.name }}{% if r.url %} · <a href="{{ r.url }}" rel="noopener noreferrer" target="_blank">link</a>{% endif %}</td><td>{{ r.kind|replace("_", " ") }}</td><td>{{ (r.technologies or [])|join(", ") }}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% elif kind == "certifications" %}<td>{{ r.name }}{% if r.credential_url %} · <a href="{{ r.credential_url }}" rel="noopener noreferrer" target="_blank">credential</a>{% endif %}</td><td>{{ r.issuer or "" }}</td><td class="nowrap">{{ r.issued_on|d }}{% if r.expires_on %} → {{ r.expires_on|d }}{% endif %}</td><td class="muted small">{{ r.source or "" }}</td>
+        {% elif kind == "achievements" %}<td>{{ r.title }}</td><td>{{ r.context }}</td><td>{{ r.achieved_on|d }}</td><td class="muted small">{{ r.source or "" }}</td>
         {% else %}<td>{{ r.label }}</td><td><a href="{{ r.url }}" rel="noopener noreferrer" target="_blank">{{ r.url }}</a></td>{% endif %}
         <td>{{ badge(r.status) }}</td>
         <td class="nowrap">
           {% if kind != "links" %}
-            {% set opts = ["confirmed","learning","unverified"] if kind == "skills" else ["confirmed","unverified"] %}
+            {% set opts = ["confirmed","learning","unverified","outdated"] if kind == "skills" else ["confirmed","unverified","outdated"] %}
             {% for st in opts if st != r.status %}
               <form method="post" action="/profile/{{ kind }}/{{ r.id }}/status" class="inline"><input type="hidden" name="status" value="{{ st }}"><button class="small">{{ "confirm" if st == "confirmed" else st }}</button></form>
             {% endfor %}

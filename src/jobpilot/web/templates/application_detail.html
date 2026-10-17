@@ -57,6 +57,8 @@
         {% if prep.missing.profile %}profile — {{ prep.missing.profile|join(", ") }}. {% endif %}
         {% if prep.missing.job %}posting — {{ prep.missing.job|join(", ") }}. {% endif %}
         {% if prep.missing.questions_unanswered %}{{ prep.missing.questions_unanswered }} question(s) unanswered.{% endif %}</div>{% endif %}
+      {% if prep.missing.profile_conflicts %}<div class="notice warn">Your resume and profile disagree on {{ prep.missing.profile_conflicts|length }} value(s) —
+        resolve them in the <a href="/hub#attention">information hub</a> before relying on either:<ul class="small">{% for c in prep.missing.profile_conflicts %}<li>{{ c }}</li>{% endfor %}</ul></div>{% endif %}
     </div>
   </div>
   {% else %}<p class="muted">No preparation record yet.</p>{% endif %}

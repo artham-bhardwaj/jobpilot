@@ -10,6 +10,7 @@ from jobpilot.models.applications import (
     ReviewItem,
 )
 from jobpilot.models.base import Base, utcnow
+from jobpilot.models.hub import ProfileClaim, ProfileImport
 from jobpilot.models.interviews import Interview, LearningItem, PrepPack
 from jobpilot.models.jobs import Company, Job, JobSighting, JobSource, MatchFeedback, SourceRun
 from jobpilot.models.outreach import (
@@ -37,7 +38,7 @@ from jobpilot.models.system import AppSetting, AuditLog, TaskRun
 __all__ = [
     "Base", "utcnow", "AppSetting", "AuditLog", "TaskRun",
     "CandidateProfile", "Education", "Employment", "ProfileLink", "Project", "Skill", "Certification", "Achievement",
-    "Resume", "ResumeVersion",
+    "Resume", "ResumeVersion", "ProfileClaim", "ProfileImport",
     "Company", "Job", "JobSighting", "JobSource",
     "Contact", "ContactInteraction", "DoNotContact", "EmailDraft", "EmailTemplate",
     "Application", "ApplicationEvent", "ApplicationEvidence", "BrowserRun", "ReviewItem",

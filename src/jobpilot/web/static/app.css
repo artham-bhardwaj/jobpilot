@@ -84,9 +84,9 @@ h3 { font-size: 1rem; margin: 14px 0 8px; }
 
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.78rem; background: var(--code); white-space: nowrap; }
 .b-ok, .b-success, .b-confirmed, .b-verified, .b-approved, .b-eligible, .b-active, .b-offer, .b-sent, .b-passed, .b-completed, .b-resolved, .b-applied, .b-likely_eligible { background: var(--ok-bg); color: var(--ok); }
-.b-warn, .b-unknown, .b-needs_review, .b-unverified, .b-draft, .b-learning, .b-running, .b-skipped, .b-ready_for_review, .b-open, .b-paused, .b-assessment, .b-interview, .b-scheduled, .b-in_progress, .b-pending { background: var(--warn-bg); color: var(--warn); }
-.b-failed, .b-ineligible, .b-rejected, .b-expired, .b-guessed, .b-withdrawn, .b-cancelled, .b-do_not_contact, .b-error, .b-archived { background: var(--bad-bg); color: var(--bad); }
-.b-preparing, .b-shortlisted, .b-discovered, .b-backlog { background: var(--info-bg); color: var(--accent); }
+.b-warn, .b-unknown, .b-needs_review, .b-unverified, .b-resume_claim, .b-suggestion, .b-draft, .b-learning, .b-running, .b-skipped, .b-ready_for_review, .b-open, .b-paused, .b-assessment, .b-interview, .b-scheduled, .b-in_progress, .b-pending { background: var(--warn-bg); color: var(--warn); }
+.b-failed, .b-ineligible, .b-rejected, .b-conflict, .b-outdated, .b-expired, .b-guessed, .b-withdrawn, .b-cancelled, .b-do_not_contact, .b-error, .b-archived { background: var(--bad-bg); color: var(--bad); }
+.b-preparing, .b-shortlisted, .b-discovered, .b-backlog, .b-dry_run { background: var(--info-bg); color: var(--accent); }
 
 .score { display: inline-block; min-width: 34px; text-align: center; font-weight: 700; padding: 1px 6px; border-radius: 6px; }
 .s-high { background: var(--ok-bg); color: var(--ok); }

@@ -151,6 +151,18 @@ def build(session: Session) -> list[dict[str, Any]]:
                            actions=[{"label": "Open profile", "url": "/profile", "method": "get"}],
                            link="/profile"))
 
+    from jobpilot.services.hub import open_conflicts
+
+    conflicts = open_conflicts(session)
+    if conflicts:
+        ack_id = stable_id("hub:" + "|".join(conflicts))
+        if ("ack:missing_profile_info", "profile", ack_id) not in acked:
+            items.append(_item("missing_profile_info", f"profile:{ack_id}", "Profile: resume and profile disagree",
+                               f"{len(conflicts)} value(s) differ, e.g. {conflicts[0]}", state="conflicting information",
+                               recommended="Open the information hub and decide which value is right",
+                               actions=[{"label": "Open hub", "url": "/hub#attention", "method": "get"}],
+                               link="/hub#attention"))
+
     active_ids = {j.id for j in active}
     linked = set(session.scalars(select(ContactJob.contact_id).where(ContactJob.job_id.in_(active_ids)))) if active_ids else set()
     for c in session.scalars(select(Contact).where(Contact.do_not_contact.is_(False),

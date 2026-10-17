@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, post_button %}
+{% block title %}Information hub{% endblock %}
+{% macro state(s) %}{{ badge(s|replace("_", " "), "badge b-" ~ s) }}{% endmacro %}
+{% macro prov(claims) -%}
+  {% for c in claims %}<div class="small muted" title="{{ c.claim.original_text or '' }}">{{ state(c.state) }} {{ c.claim.source_location }}{% if c.claim.outcome in ("conflict", "suggestion") %} · <b>{{ c.claim.outcome }}</b>{% endif %}</div>{% endfor %}
+{%- endmacro %}
+{% macro status_buttons(kind, r, back) -%}
+  {% set opts = ["confirmed","learning","unverified","outdated"] if kind == "skills" else ["confirmed","unverified","outdated"] %}
+  {% for st in opts if st != r.status %}
+    {{ post_button("/profile/" ~ kind ~ "/" ~ r.id ~ "/status", "confirm" if st == "confirmed" else st, cls="small", hidden={"status": st, "next": back}) }}
+  {% endfor %}
+  <a class="button small" href="/profile/{{ kind }}/{{ r.id }}/edit">edit</a>
+{%- endmacro %}
+{% block content %}
+{% set p = ov.profile %}
+<h1>Personal information hub</h1>
+<p class="muted">Your profile in one place, with where every value came from. A resume is a source of <b>claims</b>:
+imported values stay <b>resume claim</b> until you confirm them, and only confirmed facts are used for matching,
+resumes, answers and form filling. The data lives in your profile; this page is a view over it.</p>
+
+<div class="stats">
+  {% for s in ["verified", "resume_claim", "unverified", "learning", "outdated", "rejected"] %}
+  <div class="stat"><div class="v">{{ ov.states.get(s, 0) }}</div><div class="l">{{ s|replace("_", " ") }} claims</div></div>
+  {% endfor %}
+  <div class="stat"><div class="v"><a href="#attention">{{ ov.attention|length }}</a></div><div class="l">to resolve</div></div>
+</div>
+
+<form method="get" action="/hub" class="filters" role="search">
+  <label class="field"><span>Search claims</span><input type="search" name="q" value="{{ q }}" placeholder="e.g. Kafka, 50%, TCS"></label>
+  <label class="field"><span>State</span><select name="state"><option value="">any</option>{% for s in states %}<option value="{{ s }}" {% if s == state %}selected{% endif %}>{{ s|replace("_", " ") }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Category</span><select name="category"><option value="">any</option>{% for c in categories %}<option value="{{ c }}" {% if c == category %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
+  <div class="actions"><button>Search</button>{% if results is not none %} <a class="button" href="/hub">Clear</a>{% endif %}</div>
+</form>
+{% if results is not none %}
+<section class="card" id="results">
+  <h2>{{ results|length }} matching claim(s)</h2>
+  {% if results %}<div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Category</th><th>Field</th><th>Value</th><th>State</th><th>Outcome</th><th>Source</th></tr></thead>
+    <tbody>{% for r in results %}<tr>
+      <td>{{ r.claim.category }}</td><td>{{ r.claim.field or "" }}</td><td class="wrap">{{ (r.claim.value or "")[:240] }}</td>
+      <td>{{ state(r.state) }}</td><td>{{ r.claim.outcome }}</td>
+      <td class="small muted">{{ r.claim.source_label }}<br>{{ r.claim.source_location }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}{{ empty("Nothing matches.") }}{% endif %}
+</section>
+{% endif %}
+
+<section class="card" id="attention">
+  <h2>Needs your attention</h2>
+  {% if ov.attention %}
+  <p class="muted small">Your profile's value is kept until you decide. <b>Use resume value</b> writes it into the record;
+  <b>Keep mine</b> marks the resume value rejected so later imports of this file don't raise it again.</p>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>What</th><th>Resume says</th><th>Profile has</th><th>Where</th><th></th></tr></thead>
+    <tbody>{% for a in ov.attention %}{% set c = a.claim %}<tr>
+      <td>{{ badge(c.outcome, "badge b-" ~ c.outcome) }} {{ c.category }} · {{ c.field }}</td>
+      <td class="wrap">{{ c.value }}</td><td class="wrap">{{ c.existing_value or "(empty)" }}</td>
+      <td class="small muted">{{ c.source_location }}</td>
+      <td class="nowrap">{% if c.field != "dates" %}{{ post_button("/hub/claims/" ~ c.id ~ "/apply", "Use resume value", cls="small primary") }}{% endif %}
+        {{ post_button("/hub/claims/" ~ c.id ~ "/dismiss", "Keep mine", cls="small") }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}{{ empty("No conflicts or suggestions.") }}{% endif %}
+  {% if ov.issues %}<h3>Missing or inconsistent information</h3>
+  <ul class="checklist">{% for i in ov.issues %}<li>{{ badge(i.severity) }} {{ i.message }} · <a href="{{ i.link }}">fix</a></li>{% endfor %}</ul>{% endif %}
+</section>
+
+<section class="card" id="profile">
+  <h2>Personal profile {{ state("verified" if p.confirmed_at else "unverified") }}</h2>
+  <table class="kv">
+    {% for f, label in [("full_name","Name"),("headline","Headline"),("email","Email"),("phone","Phone"),("current_location","Location"),("summary","Professional summary")] %}
+    <tr><th>{{ label }}</th><td>{{ p[f] or "—" }}{{ prov(ov.profile_claims.get(f, [])) }}</td></tr>
+    {% endfor %}
+    <tr><th>Links</th><td>{% for r in ov.links %}<div>{{ r.obj.label }}: <a href="{{ r.obj.url }}" rel="noopener noreferrer" target="_blank">{{ r.obj.url }}</a> {{ state(r.state) }}
+      {% if r.obj.status != "confirmed" %}{{ post_button("/profile/links/" ~ r.obj.id ~ "/status", "confirm", cls="small", hidden={"status": "confirmed", "next": "/hub#profile"}) }}{% endif %}</div>{% else %}—{% endfor %}</td></tr>
+  </table>
+  <p class="actions"><a class="button" href="/profile#details">Edit details</a></p>
+</section>
+
+<section class="card" id="employment">
+  <h2>Employment</h2>
+  <p class="muted small">Experience: {{ ov.years[0] if ov.years[0] is not none else "unknown" }} years ({{ ov.years[1] }});
+    {{ ov.experience.development }} in roles recorded as software development. Projects never count as employment.</p>
+  {% for r in ov.employment %}{% set e = r.obj %}
+  <div class="card">
+    <h3>{{ e.title }}, {{ e.company }} {{ state(r.state) }}</h3>
+    <p class="small">{{ e.start_date|d }} → {{ e.end_date|d if e.end_date else "present" }} · {{ e.employment_type or "type not recorded" }} ·
+      {% if e.role_type %}{{ e.role_type|replace("_", " ") }}{% else %}<b>kind of work not recorded</b>{% endif %}</p>
+    <ul>{% for ln in (e.description or "").splitlines() if ln.strip() %}<li>{{ ln }}</li>{% endfor %}</ul>
+    <details><summary class="small">Sources ({{ r.claims|length }})</summary>{{ prov(r.claims) }}</details>
+    <div class="actions">{{ status_buttons("employment", e, "/hub#employment") }}</div>
+  </div>
+  {% else %}{{ empty("No employment recorded.") }}{% endfor %}
+</section>
+
+<section class="card" id="education">
+  <h2>Education</h2>
+  {% if ov.education %}<div class="table-wrap"><table class="table">
+    <thead><tr><th>Qualification</th><th>Institution</th><th>Dates</th><th>Grade</th><th>State</th><th></th></tr></thead>
+    <tbody>{% for r in ov.education %}{% set e = r.obj %}<tr>
+      <td>{{ e.degree or "" }}{% if e.field_of_study %}, {{ e.field_of_study }}{% endif %}</td><td>{{ e.institution }}{% if e.notes %}<div class="small muted">{{ e.notes|nl2br }}</div>{% endif %}</td>
+      <td class="nowrap">{{ e.start_date|d }} → {{ e.end_date|d }}</td><td>{{ e.grade or "—" }}</td>
+      <td>{{ state(r.state) }}<details><summary class="small">sources</summary>{{ prov(r.claims) }}</details></td>
+      <td class="nowrap">{{ status_buttons("education", e, "/hub#education") }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}{{ empty("No education recorded.") }}{% endif %}
+</section>
+
+<section class="card" id="skills">
+  <h2>Skills and evidence</h2>
+  <p class="muted small">Proficiency is never inferred from a resume. "Resume claim" usage comes from your resume's wording;
+  "verified" usage comes from confirmed roles and projects. Only confirmed skills are used for matching.</p>
+  {% set unconf = ov.skills|selectattr("skill.status", "equalto", "unverified")|map(attribute="skill.name")|list %}
+  {% if unconf %}<div class="notice">Unconfirmed ({{ unconf|length }}): {{ unconf|join(", ") }}</div>{% endif %}
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Skill</th><th>Resume category</th><th>Versions</th><th>Usage</th><th>Evidence</th><th>State</th><th></th></tr></thead>
+    <tbody>{% for r in ov.skills %}{% set s = r.skill %}<tr>
+      <td><b>{{ s.name }}</b>{% if r.aliases and r.aliases|join(", ")|lower != s.name|lower %}<div class="small muted">as written: {{ r.aliases|join(", ") }}</div>{% endif %}</td>
+      <td class="small">{{ r.resume_categories|join(", ") }}</td>
+      <td class="small">{% for v in r.versions %}{{ v.version }} <span class="muted">({{ v.where }})</span>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+      <td class="small">{{ r.usage|join("; ") }}</td>
+      <td class="small">{% if r.work %}work: {{ r.work|join(", ") }}{% endif %}{% if r.projects %}{% if r.work %}<br>{% endif %}projects: {{ r.projects|join(", ") }}{% endif %}</td>
+      <td>{{ state(r.state) }}</td>
+      <td class="nowrap">{{ status_buttons("skills", s, "/hub#skills") }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="card" id="projects">
+  <h2>Projects</h2>
+  <p class="muted small">Personal projects are listed separately from employment and are never presented as work experience.</p>
+  {% for r in ov.projects %}{% set pr = r.obj %}
+  <div class="card">
+    <h3>{{ pr.name }} {{ state(r.state) }} <span class="small muted">{{ pr.kind|replace("_", " ") }} · {{ pr.start_date|d }} → {{ pr.end_date|d if pr.end_date else "present" }}</span></h3>
+    {% if pr.url %}<p class="small"><a href="{{ pr.url }}" rel="noopener noreferrer" target="_blank">{{ pr.url }}</a></p>{% endif %}
+    <p class="small">{% for t in pr.technologies or [] %}<span class="tag">{{ t }}</span> {% endfor %}</p>
+    <ul>{% for b in r.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+    {% if r.metrics %}<p class="small">Numbers to be able to back up: {{ r.metrics|join(", ") }}</p>{% endif %}
+    {% if r.docs %}<p class="small">Repository documentation:</p><ul class="small">{% for d in r.docs %}<li>{{ d.claim.field|replace("_", " ") }}: {{ d.claim.value }}{% if d.claim.notes %} <span class="muted">({{ d.claim.notes }})</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+    <details><summary class="small">Interview talking points</summary><ul class="small">{% for t in r.talking_points %}<li>{{ t }}</li>{% endfor %}</ul></details>
+    <details><summary class="small">Sources ({{ r.claims|length }})</summary>{{ prov(r.claims) }}</details>
+    <div class="actions">{{ status_buttons("projects", pr, "/hub#projects") }}</div>
+  </div>
+  {% else %}{{ empty("No projects recorded.") }}{% endfor %}
+</section>
+
+<section class="card" id="certifications">
+  <h2>Certifications and achievements</h2>
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Item</th><th>Details</th><th>State</th><th></th></tr></thead>
+    <tbody>
+    {% for r in ov.certifications %}<tr><td>{{ r.obj.name }}</td><td class="small">{{ r.obj.issuer or "issuer not recorded" }}{% if r.obj.issued_on %} · {{ r.obj.issued_on|d }}{% endif %}</td><td>{{ state(r.state) }}</td><td class="nowrap">{{ status_buttons("certifications", r.obj, "/hub#certifications") }}</td></tr>{% endfor %}
+    {% for r in ov.achievements %}<tr id="achievements"><td>{{ r.obj.title }}</td><td class="small">{{ r.obj.context }}{% if r.obj.description %} · {{ r.obj.description|nl2br }}{% endif %}</td><td>{{ state(r.state) }}</td><td class="nowrap">{{ status_buttons("achievements", r.obj, "/hub#certifications") }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card" id="preferences">
+  <h2>Career preferences and goals</h2>
+  <table class="kv">
+    <tr><th>Target titles</th><td>{{ (p.preferred_titles or [])|join(", ") or "not recorded" }}</td></tr>
+    <tr><th>Locations</th><td>{{ (p.acceptable_locations or [])|join(", ") or "not recorded" }} · relocate: {{ "yes" if p.willing_to_relocate else ("no" if p.willing_to_relocate is not none else "not set") }}</td></tr>
+    <tr><th>Work arrangement</th><td>{{ (p.remote_preferences or [])|join(", ") or "not recorded" }}</td></tr>
+    <tr><th>Notice period</th><td>{{ p.notice_period_days ~ " days" if p.notice_period_days is not none else "not recorded" }}</td></tr>
+    <tr><th>Salary expectation</th><td>{% if p.salary_expectation_min or p.salary_expectation_max %}{{ p.salary_expectation_min or "?" }}–{{ p.salary_expectation_max or "?" }} {{ p.salary_currency or "" }}{% else %}not recorded{% endif %}</td></tr>
+    <tr><th>Priorities</th><td>{{ p.job_search_priorities or "not recorded" }}</td></tr>
+    <tr><th>Learning</th><td>{% for li in ov.learning %}<span class="tag learn">{{ li.skill_name }} · {{ li.status }} · {{ li.progress_pct }}%</span> {% endfor %}
+      {% for s in ov.learning_skills %}<span class="tag learn">{{ s }}</span> {% endfor %}{% if not ov.learning and not ov.learning_skills %}nothing recorded{% endif %}</td></tr>
+  </table>
+  <p class="actions"><a class="button" href="/profile#details">Edit preferences</a> <a class="button" href="/skills">Skill gaps and learning</a></p>
+</section>
+
+<section class="card" id="answers">
+  <h2>Application answers</h2>
+  {% if ov.answers %}<div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Question</th><th>Answer</th><th>Status</th></tr></thead>
+    <tbody>{% for a in ov.answers %}<tr><td>{{ a.question }}</td><td class="small wrap">{{ a.answer[:300]|nl2br }}</td>
+      <td>{% if a.sensitive %}{{ badge("sensitive", "badge b-warn") }}{% endif %}{{ badge("approved" if a.approved else "draft") }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}{{ empty("No answers yet.") }}{% endif %}
+  <p class="actions"><a class="button" href="/answers">Answer bank (review and approve)</a></p>
+</section>
+
+<section class="card" id="imports">
+  <h2>Resumes and imports</h2>
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Resume version</th><th>File</th><th>SHA-256</th><th>Status</th><th></th></tr></thead>
+    <tbody>{% for v in ov.versions %}<tr><td>{{ v.label }}</td><td class="small">{{ v.original_filename or v.source }}</td>
+      <td class="mono small">{{ (v.sha256 or "")[:16] }}</td><td>{{ badge(v.status) }}</td>
+      <td class="nowrap">{% if v.file_path %}{{ post_button("/hub/import", "Import into profile", cls="small primary", hidden={"version_id": v.id}) }}
+        {{ post_button("/hub/import", "Dry run", cls="small", hidden={"version_id": v.id, "dry_run": "1"}) }}{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <form method="post" action="/hub/import" enctype="multipart/form-data" class="actions">
+    <label class="field"><span>Import a new resume (PDF, DOCX, TXT): it is stored unchanged and registered as a draft version</span><input type="file" name="file" accept=".pdf,.docx,.txt,.md" required></label>
+    <label class="checkbox"><input type="checkbox" name="dry_run" value="1"> dry run (report only)</label>
+    <button class="primary">Import</button>
+  </form>
+  <h3>Import history</h3>
+  {% if ov.imports %}<div class="table-wrap"><table class="table compact">
+    <thead><tr><th>When</th><th>File</th><th>Status</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Conflicts</th><th>Suggestions</th></tr></thead>
+    <tbody>{% for i in ov.imports %}{% set c = i.counts or {} %}<tr><td><a href="/hub/imports/{{ i.id }}">{{ i.created_at|dt }}</a></td>
+      <td class="small">{{ i.source_filename }}</td><td>{{ badge(i.status) }}</td><td>{{ c.created or 0 }}</td><td>{{ c.updated or 0 }}</td>
+      <td>{{ c.unchanged or 0 }}</td><td>{{ c.conflict or 0 }}</td><td>{{ c.suggestion or 0 }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}{{ empty("No imports yet.") }}{% endif %}
+  <h3>Sources</h3>
+  <ul class="small">{% for src, n in ov.sources|dictsort %}<li>{{ src }}: {{ n }} claim(s)</li>{% else %}<li>none</li>{% endfor %}</ul>
+</section>
+
+<section class="card" id="history">
+  <h2>Recent profile changes</h2>
+  <ul class="activity small">{% for h in ov.history %}<li>{{ h.created_at|dt }} · {{ h.action }} · {{ h.entity_type or "" }} {{ h.entity_id or "" }}</li>{% else %}<li>none</li>{% endfor %}</ul>
+</section>
+{% endblock %}

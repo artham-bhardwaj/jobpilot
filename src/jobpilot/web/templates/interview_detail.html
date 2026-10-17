@@ -70,6 +70,7 @@
     {% endfor %}
     <h3>Stories from your verified experience</h3><ul>{% for s in c.stories %}<li>{{ s }}</li>{% endfor %}</ul>
     {% if c.project_questions %}<h3>Questions about your projects</h3><ul>{% for q in c.project_questions %}<li>{{ q }}</li>{% endfor %}</ul>{% endif %}
+    {% if c.project_talking_points %}<h3>Numbers you state about your projects</h3><ul>{% for q in c.project_talking_points %}<li>{{ q }}</li>{% endfor %}</ul>{% endif %}
     <h3>Questions to ask</h3><ul>{% for q in c.questions_to_ask %}<li>{{ q }}</li>{% endfor %}</ul>
   {% else %}<p class="muted">Not generated yet.</p>{% endif %}
 </section>

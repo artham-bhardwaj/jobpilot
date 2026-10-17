@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty %}
+{% block title %}Import report{% endblock %}
+{% block content %}
+{% set c = imp.counts or {} %}
+{% set r = imp.report or {} %}
+<p><a href="/hub#imports">← Information hub</a></p>
+<h1>Import report {{ badge(imp.status) }}</h1>
+<table class="kv">
+  <tr><th>File</th><td>{{ imp.source_filename }}</td></tr>
+  <tr><th>SHA-256</th><td class="mono small">{{ imp.source_sha256 }}</td></tr>
+  <tr><th>Extraction</th><td>{{ imp.extraction_method or "—" }} · parser v{{ imp.parser_version }}</td></tr>
+  <tr><th>When</th><td>{{ imp.created_at|dt }}</td></tr>
+  {% if imp.backup_path %}<tr><th>Backup taken first</th><td class="small">{{ imp.backup_path }}</td></tr>{% endif %}
+  {% if r.verification %}<tr><th>Verified</th><td>{{ r.verification.checked }} record(s) read back{% if r.verification.missing %}; missing: {{ r.verification.missing|join(", ") }}{% endif %}</td></tr>{% endif %}
+  {% if imp.error %}<tr><th>Error</th><td>{{ imp.error }}</td></tr>{% endif %}
+</table>
+<div class="stats">
+  {% for k in ["created", "updated", "unchanged", "conflict", "suggestion", "dismissed"] %}
+  <div class="stat"><div class="v">{{ c.get(k, 0) }}</div><div class="l">{{ k }}</div></div>
+  {% endfor %}
+</div>
+{% if r.warnings %}<div class="notice warn">{{ r.warnings|join("; ") }}</div>{% endif %}
+{% if imp.status == "dry_run" %}<div class="notice">Dry run: nothing was saved.</div>{% endif %}
+<section class="card">
+  <h2>Items</h2>
+  {% if r["items"] %}<div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Outcome</th><th>Category</th><th>Field</th><th>Value</th><th>Profile had</th></tr></thead>
+    <tbody>{% for it in r["items"]|sort(attribute="outcome") %}<tr>
+      <td>{{ badge(it.outcome, "badge b-" ~ it.outcome) }}</td><td>{{ it.category }}</td><td>{{ it.field or "" }}</td>
+      <td class="wrap small">{{ it.value }}</td><td class="wrap small">{{ it.existing or "" }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}{{ empty("No items.") }}{% endif %}
+</section>
+{% endblock %}

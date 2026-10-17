@@ -76,6 +76,8 @@ class ProfileIn(_In):
 class LinkIn(_In):
     label: str = Field(min_length=1, max_length=100)
     url: HttpUrl
+    # Links you type in are yours; links found in an imported resume start unverified.
+    status: FactStatus = "confirmed"
 
 
 class EducationIn(_In):

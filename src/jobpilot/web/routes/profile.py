@@ -53,7 +53,8 @@ FACT_FIELDS = {
                      ("achieved_on", "Date", "date", None),
                      ("description", "Details (only what you can back up — no estimated metrics)", "textarea", None),
                      ("status", "Status", "select", FACT_STATUS), ("source", "Source", "text", None)],
-    "links": [("label", "Label *", "text", None), ("url", "URL *", "url", None)],
+    "links": [("label", "Label *", "text", None), ("url", "URL *", "url", None),
+              ("status", "Status", "select", FACT_STATUS)],
 }
 KIND_LABELS = {"employment": "Employment", "education": "Education", "projects": "Projects", "skills": "Skills",
                "certifications": "Certifications", "achievements": "Achievements", "links": "Links"}
@@ -116,11 +117,12 @@ async def fact_save(kind: str, request: Request, fact_id: int | None = None, db:
 async def fact_status(kind: str, fact_id: int, request: Request, db: Session = Depends(get_db)):
     _check_kind(kind)
     form = await form_dict(request)
+    back = form.get("next") if str(form.get("next") or "").startswith("/hub") else f"/profile#{kind}"
     try:
         ps.set_fact_status(db, kind, fact_id, form.get("status") or "")
     except (ValueError, LookupError) as exc:
-        return redirect(f"/profile#{kind}", err=str(exc))
-    return redirect(f"/profile#{kind}", msg="Status updated")
+        return redirect(back, err=str(exc))
+    return redirect(back, msg="Status updated")
 
 
 @router.post("/{kind}/{fact_id:int}/delete")

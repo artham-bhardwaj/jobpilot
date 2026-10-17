@@ -109,6 +109,7 @@ def register(sub) -> None:
                    help="The application page's host name; you approve opening exactly this site")
     s.set_defaults(func=cmd_assist)
 
-    from jobpilot import cli_ops
+    from jobpilot import cli_hub, cli_ops
 
     cli_ops.register(sub)
+    cli_hub.register(sub)

@@ -56,6 +56,12 @@ is optional and disabled by default.
 - **Tasks** run through `services/tasks.run_task`: `fcntl` lock per task (no overlap),
   bounded retries, and a `task_runs` record. The scheduler only invokes due tasks.
 - **Audit log** for every consequential action (`audit_log` table + JSON log).
+- **Information hub = provenance, not a copy**: `services/resume_parser.py` turns a resume into structured entries
+  (deterministic; `pdftotext` when available, pypdf otherwise) and `services/hub.py` maps them onto the existing
+  profile tables through `services/profile.py`. `profile_claims` records each value's source file hash, location,
+  original wording and the import's outcome (created / updated / unchanged / conflict / suggestion); claim keys are
+  name-based, so re-imports are idempotent and later resume versions can refresh values an import wrote while
+  keeping your edits. Confirmed facts are never written by an import. `profile_imports` keeps each run's report.
 
 ## Data locations (all under `JOBPILOT_DATA_DIR`, default `./data`, git-ignored)
 
@@ -78,3 +84,6 @@ is optional and disabled by default.
 | 0003 | contacts, interactions, do-not-contact, email templates, drafts |
 | 0004 | applications, events, evidence, review items, browser runs; `email_drafts.application_id` |
 | 0005 | interviews, prep packs, learning backlog |
+| 0006 | pipeline, sources, matching, preparation |
+| 0007 | certifications, achievements, project kinds, role types, preferences |
+| 0008 | information hub: `profile_imports`, `profile_claims` |

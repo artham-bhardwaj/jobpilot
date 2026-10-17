@@ -147,7 +147,7 @@ def prepare_snapshot(session: Session, app: Application) -> dict[str, Any]:
     References people and facts by id/label only; it does not copy your contact details.
     """
     from jobpilot.models import Contact, ContactJob, EmailDraft, Employment, Project
-    from jobpilot.services import answers as answer_svc
+    from jobpilot.services import answers as answer_svc, hub as hub_svc
     from jobpilot.services.jobs import canonical_url
     from jobpilot.services.skills_taxonomy import extract_skills
 
@@ -202,6 +202,7 @@ def prepare_snapshot(session: Session, app: Application) -> dict[str, Any]:
         "facts": {"skills_matched": sk.get("have") or [], "skills_unverified": sk.get("unverified") or [],
                   "skills_missing": sk.get("missing_mandatory") or [], "experience": experience},
         "missing": {"profile": m.get("missing_profile_info") or [], "job": m.get("missing_job_info") or [],
+                    "profile_conflicts": hub_svc.open_conflicts(session),
                     "questions_unanswered": sum(1 for x in qs if x["q"].status != "approved")},
         "answers": {"total": len(qs), "approved": sum(1 for x in qs if x["q"].status == "approved"),
                     "sensitive": sum(1 for x in qs if x["q"].sensitive),

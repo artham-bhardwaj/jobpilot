@@ -78,12 +78,10 @@ email drafts and form autofill. Unverified facts (e.g. suggested from a resume) 
         {% else %}<td>{{ r.label }}</td><td><a href="{{ r.url }}" rel="noopener noreferrer" target="_blank">{{ r.url }}</a></td>{% endif %}
         <td>{{ badge(r.status) }}</td>
         <td class="nowrap">
-          {% if kind != "links" %}
-            {% set opts = ["confirmed","learning","unverified","outdated"] if kind == "skills" else ["confirmed","unverified","outdated"] %}
-            {% for st in opts if st != r.status %}
-              <form method="post" action="/profile/{{ kind }}/{{ r.id }}/status" class="inline"><input type="hidden" name="status" value="{{ st }}"><button class="small">{{ "confirm" if st == "confirmed" else st }}</button></form>
-            {% endfor %}
-          {% endif %}
+          {% set opts = ["confirmed","learning","unverified","outdated"] if kind == "skills" else ["confirmed","unverified","outdated"] %}
+          {% for st in opts if st != r.status %}
+            <form method="post" action="/profile/{{ kind }}/{{ r.id }}/status" class="inline"><input type="hidden" name="status" value="{{ st }}"><button class="small">{{ "confirm" if st == "confirmed" else st }}</button></form>
+          {% endfor %}
           <a class="button small" href="/profile/{{ kind }}/{{ r.id }}/edit">edit</a>
           <form method="post" action="/profile/{{ kind }}/{{ r.id }}/delete" class="inline" data-confirm="Delete this entry?"><button class="small danger">delete</button></form>
         </td>

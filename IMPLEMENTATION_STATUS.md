@@ -1,12 +1,41 @@
 # JobPilot — implementation status
 
-**Source of truth for what is verified.** Last updated: 2026-10-16, after Milestone 11 (end-to-end completion pass; 406 tests passing).
+**Source of truth for what is verified.** Last updated: 2026-10-17, after Milestone 12 (information hub; 439 tests passing).
 Commits: `19f3d19` baseline, `04b70f3` Milestone 8, `cb9b23f` Milestone 9, `83f3061` Milestone 10 offline phases,
 `c57890d` live-Greenhouse fixes, `d93af81` requirement and deadline parsing, then Milestone 11 (see below).
 `docs/CHECKLIST.md` is superseded by this file.
 
 Legend: **Verified** = exercised by automated tests and/or the live local checks below.
 **Offline-verified** = tested only against recorded/synthetic responses; the live service has not been contacted.
+
+## Milestone 12 — personal information hub and resume import (2026-10-17)
+
+**Already existed:** profile tables with `confirmed/unverified/learning/outdated` status and a free-text `source`;
+resume versions with SHA-256 dedup and a claim check before approval; matching, resume generation, prep packs and
+autofill restricted to confirmed facts; keyword-only skill suggestions from resume text.
+
+**Added:**
+- `services/resume_parser.py`: deterministic extraction (`pdftotext -layout` when installed, pypdf fallback with a
+  warning; PDF link annotations) and section parsing with original wording, page/section/bullet locations, stated
+  date precision, skill versions and sub-skills.
+- `services/hub.py` + migration `0008` (`profile_imports`, `profile_claims`): the import pipeline (backup → extract →
+  parse → match → write via `services/profile.py` in a savepoint → read back → report), merge rules (confirmed never
+  written; edited values kept; conflicts/suggestions recorded), apply/dismiss, validation issues, the hub read model,
+  and `link_project_docs` (README, `docs/` names, git origin only).
+- `/hub` page, `/hub/imports/{id}` report, `/api/hub`, `/api/hub/claims`; `jobpilot hub import|report|link-docs`.
+- Integration: open conflicts appear in the review queue and application preparation; prep packs list confirmed
+  projects' stated numbers; links can be unverified; skill dictionary gains Prometheus and Grafana (no longer folded
+  into "observability"), Spring Boot Actuator, Micrometer, event-driven architecture, MCP, AI agents, embeddings,
+  TF-IDF, semantic search, code intelligence.
+- `tests/test_m12_hub.py` (33 tests, synthetic data). Full suite: 439 passed (`.venv/bin/pytest`, 4 min 10 s).
+
+**Run on your data (2026-10-17):** server stopped with SIGTERM, migration 0008 applied (`pre-migrate-0007` backup),
+`jobpilot hub import --file "~/Documents/AB63 Resume/ArthamBhardwajBackendEngineer2.pdf"` (`pre-hub-import` backup),
+ChangeGuard docs linked, import re-run, server restarted. The file's SHA-256 matched Master resume v1, so it was not
+stored again and its approval was left as is. Import 1: 61 created, 20 updated, 40 unchanged, 3 conflicts,
+2 suggestions; 126 records read back. Import 2: 0 created, 0 updated, 121 unchanged, same 3 conflicts and
+2 suggestions. Open: headline (an address line vs "Backend Software Engineer"), TCS title ("Systems" vs "System
+Engineer"), B.Tech field ("Computer Science" vs "… and Engineering"); suggestions: CGPA 9.40/10, location Dehradun.
 
 ## Milestone 11 — end-to-end completion pass (2026-10-16)
 

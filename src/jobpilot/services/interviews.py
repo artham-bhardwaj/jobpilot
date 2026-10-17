@@ -309,8 +309,11 @@ def generate_prep_pack(session: Session, iv: Interview) -> PrepPack:
         else:
             stories.append(f"Work — {e.title} at {e.company}" + (f" ({kind})" if kind else
                            " (kind of work not recorded on your profile: describe it as it was)"))
-    project_questions = []
+    project_questions, talking_points = [], []
     for p in session.scalars(select(Project).where(Project.status == "confirmed")):
+        for line in (p.description or "").splitlines():
+            if re.search(r"\d", line) and len(talking_points) < 10:
+                talking_points.append(f"{p.name}: be ready to explain how you got and measured “{line.strip()[:200]}”")
         label = {"academic": "academic project", "learning_exercise": "learning exercise",
                  "open_source": "open-source contribution"}.get(p.kind or "personal", "personal project")
         stories.append(f"{label.capitalize()} — {p.name}: not production experience; say so if asked")
@@ -332,6 +335,7 @@ def generate_prep_pack(session: Session, iv: Interview) -> PrepPack:
         "stories": [f"Prepare a STAR story drawing on: {s}" for s in stories] or
                    ["Add confirmed employment or projects to your profile to get story prompts."],
         "project_questions": project_questions[:15],
+        "project_talking_points": talking_points,
         "questions_to_ask": ["What does success look like in the first 90 days?", "How is the team structured and how does work get prioritised?",
                              "What does the development and release process look like?", "What are the next steps in the process?"],
         "notes": ["Topics are general preparation for this stage and the job's stated skills. JobPilot has no "

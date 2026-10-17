@@ -82,18 +82,25 @@ def seed_profile(session, *, years: float | None = 1.5, skills=("java", "spring 
     session.flush()
 
 
-def make_pdf_bytes(text_lines: list[str]) -> bytes:
-    """Build a tiny valid PDF with the given text lines (no external deps)."""
+def make_pdf_bytes(text_lines: list[str], links: list[tuple[str, float, float]] | None = None) -> bytes:
+    """Build a tiny valid PDF with the given text lines (no external deps).
+
+    ``links``: (uri, x, y) link annotations, as a resume's clickable "LinkedIn"/"GitHub" labels.
+    """
     content = "BT /F1 11 Tf 50 780 Td 14 TL " + " ".join(
         "(" + line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ") Tj T*" for line in text_lines
     ) + " ET"
+    links = links or []
+    annots = f" /Annots [{' '.join(f'{6 + i} 0 R' for i in range(len(links)))}]" if links else ""
     objs = [
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >>"
+        + annots + " >>",
         f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
+    ] + [f"<< /Type /Annot /Subtype /Link /Rect [{x} {y} {x + 40} {y + 12}] /Border [0 0 0] "
+         f"/A << /Type /Action /S /URI /URI ({uri}) >> >>" for uri, x, y in links]
     out = b"%PDF-1.4\n"
     offsets = []
     for i, body in enumerate(objs, start=1):

@@ -32,6 +32,60 @@ Editing core details clears their confirmation; click *Confirm details* again. E
 from your stated total, or are computed from confirmed full-time roles. If neither exists,
 experience is **unknown** and eligibility checks say so.
 
+## 1a. Information hub (import your resume once)
+
+**Information hub** (`/hub`) shows your whole profile in one place: details, links, employment, education, skills
+with their evidence, projects, certifications, achievements, preferences, learning, answers, resume versions and
+imports. It is a view over the profile, not a second copy: editing and confirming still happen on the same records.
+
+**Importing a resume** fills the profile from the file instead of typing:
+
+- Web: *Information hub → Resumes and imports* → *Import into profile* on a resume version, or upload a new file
+  (tick *dry run* to see the report without saving).
+- CLI: `jobpilot hub import --file ~/path/resume.pdf` (or `--version ID`, add `--dry-run` to preview);
+  `jobpilot hub report` shows the latest report.
+
+What the import does:
+
+1. Stores the file unchanged (SHA-256 recorded). The exact same file is never registered twice; a new file becomes
+   a **draft** version of your master resume. Approving it stays your decision.
+2. Extracts text locally (`pdftotext` from poppler-utils if installed, otherwise pypdf; PDF link targets such as
+   LinkedIn/GitHub are read from the file). Nothing is sent anywhere; no AI is used.
+3. Parses the sections (experience, skills, projects, education, certifications, achievements) and keeps each
+   bullet's original wording and location ("page 1 · EXPERIENCE · bullet 2").
+4. Matches each value to your existing records and writes through the normal profile services:
+   - new facts are created **unverified** ("resume claim"); nothing is confirmed by an import;
+   - a **confirmed** record is never changed: a different value is listed as a **conflict**, a value for an empty
+     field as a **suggestion**;
+   - an unverified record is refreshed only where it still holds what an earlier import wrote; if you edited it,
+     your text is kept and the difference becomes a conflict;
+   - kind of work, employment type, issuers and years of experience are never guessed. Dates keep their stated
+     precision ("Dec 2025" is stored as 1 Dec 2025 and labelled month precision; a year-only date is kept in the
+     notes, not invented).
+5. Reads every written record back, then shows a report: created / updated / unchanged / conflicts / suggestions.
+
+Re-importing the same file changes nothing. A backup (`pre-hub-import`) is taken before each real import, and a
+failed import leaves the profile as it was (the failed attempt is recorded).
+
+**Resolving**: *Needs your attention* lists conflicts and suggestions. *Use resume value* writes it into the record;
+*Keep mine* marks the resume value rejected so it is not raised again for that file. Conflicts also appear in the
+review queue and on application preparation pages until resolved.
+
+**States** shown next to each value: *verified* (the record is confirmed), *resume claim* (imported, unconfirmed),
+*unverified* (other unconfirmed sources, e.g. repository docs or answer drafts), *learning*, *outdated*, *rejected*.
+Confirm records with the buttons in the hub; only confirmed facts are used for matching, resumes, answers and forms.
+
+**Skills**: each skill shows the resume category it was listed under, stated versions (e.g. Spring Boot 3.x on the
+skills list, 3.5 in a project), and whether it is evidenced by work, a personal project, or only listed.
+Proficiency is never inferred.
+
+**Answer drafts**: the import adds unapproved answer-bank drafts only where the answer is already stated (notice
+period, relocation, the first project's and role's own bullets). Drafts are never suggested until you approve them.
+
+**Project documentation**: `jobpilot hub link-docs --project NAME --path ~/projects/<repo>` references a local
+repository's README (title and first paragraph), the names of files in `docs/`, and its `origin` URL. Source code
+and other files are not read. Repository text is kept separate from the resume's wording.
+
 ## 2. Resumes
 
 - Create the standard slots, then **import** your existing files. Files are stored byte-for-byte

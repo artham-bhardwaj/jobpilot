@@ -39,7 +39,8 @@ is needed. Without Chrome, run `.venv/bin/playwright install chromium` and set t
 
 ## First steps
 
-1. **Profile** → fill in what you want to use, then *Confirm details*. Add skills and mark the ones
+1. **Information hub** → import your resume (or `jobpilot hub import --file resume.pdf`), resolve conflicts, and
+   confirm what is accurate. Then **Profile** → fill in anything else, then *Confirm details*. Add skills and mark the ones
    you can genuinely claim as *confirmed*. For each role, set **Kind of work** (only "software development"
    counts as development experience).
 2. **Resumes** → *Create standard resume slots* (Master, Java Backend, SDE I, General SWE, Python
@@ -51,6 +52,19 @@ is needed. Without Chrome, run `.venv/bin/playwright install chromium` and set t
 5. Work from **Overview**, **Jobs**, and the **Review queue**.
 
 See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the full workflow.
+
+## Importing your resume into the profile
+
+```bash
+.venv/bin/jobpilot hub import --file ~/Documents/resume.pdf --dry-run   # report only
+.venv/bin/jobpilot hub import --file ~/Documents/resume.pdf             # backup first, then import
+.venv/bin/jobpilot hub report                                           # latest import report
+```
+
+Or use **Information hub** (`/hub`) in the dashboard. The import fills employment, education, skills, projects,
+certifications, achievements and links as **unverified resume claims** with their source (file hash, page, section,
+bullet). Confirmed facts are never overwritten: differences are listed as conflicts for you to resolve. Re-importing
+the same file is a no-op. See [docs/USER_GUIDE.md §1a](docs/USER_GUIDE.md).
 
 ## Collecting jobs manually
 
@@ -91,6 +105,8 @@ jobpilot import-jobs FILE.csv|json        # import jobs
 jobpilot rematch                          # re-score active jobs
 jobpilot assist APP_ID --approve-host HOST # open browser for one approved site (never submits)
 jobpilot backup create|list|restore --name FILE
+jobpilot hub import --file F|--version ID [--dry-run]   # resume → profile (see below)
+jobpilot hub report [--id N] | hub link-docs --project NAME --path DIR
 jobpilot export jobs|applications|contacts|drafts|interviews|summary|all-json [--out FILE]
 jobpilot delete-data profile|contacts|outreach|everything [--include-backups]
 jobpilot scheduler run-due|status|run --task NAME|systemd [--out DIR]
@@ -105,7 +121,7 @@ jobpilot --debug <command>                # show a full traceback if something f
 ## Tests
 
 ```bash
-.venv/bin/pytest            # 406 tests, offline (fake HTTP, fake DNS), synthetic fixtures only (~6 min)
+.venv/bin/pytest            # 439 tests, offline (fake HTTP, fake DNS), synthetic fixtures only (~6 min)
 ```
 
 A few tests drive your local Chrome headlessly (PDF rendering, form-fill safety); they are skipped

@@ -109,21 +109,41 @@ and other files are not read. Repository text is kept separate from the resume's
   falls back to a related category or your master resume, and **tells you** when it had to fall
   back or when no approved resume exists. It never writes resume content for you.
 
+### Tailored resumes
+
+For every eligible job JobPilot can make a job-specific PDF from your approved Master resume's LaTeX source: the same
+approved content, re-ordered for the job, compiled locally and validated, then attached to that job's application
+instead of the Master resume. See [TAILORED_RESUMES.md](TAILORED_RESUMES.md) (`jobpilot resume …`, the *Tailored
+resume* panel on a job's page).
+
 ## 3. Jobs
 
-**Sources** (one company board each):
+**Sources** (one company board or career site each). Every type except `jsonld`/`sitemap` accepts optional
+`"title_keywords"`, `"location_keywords"` and `"exclude_keywords"` lists; only matching postings are kept.
 
 | Type | Config | Notes |
 |---|---|---|
-| greenhouse | `{"board_token": "acme"}` | from `boards.greenhouse.io/acme` |
-| lever | `{"site": "acme"}` | from `jobs.lever.co/acme` |
-| ashby | `{"board": "acme"}` | from `jobs.ashbyhq.com/acme`; not yet tested against a live board |
+| greenhouse | `{"board_token": "acme", "title_keywords": [...]}` | public Job Board API. With keywords, the light listing is filtered first and only matches are read (boards over 5 MB work). Applications use Greenhouse's own form (`job-boards.greenhouse.io/embed/job_app?for=…&token=…`) when the posting links to the company's site |
+| lever | `{"site": "acme"}` | public Postings API |
+| ashby | `{"board": "acme"}` | public Posting API; not yet tested against a live board |
 | jsonld | `{"urls": ["https://…/job/1", …]}` | job pages with schema.org JobPosting data |
+| sitemap | `{"sitemap_url": "…/siteMap.xml", "title_keywords": [...]}` | any site with a sitemap and JobPosting pages. On Workday it sees only the ~100 newest postings worldwide; prefer `workday` |
+| workday | `{"site_url": "https://acme.wd5.myworkdayjobs.com/External", "queries": ["software engineer india"], "title_keywords": [...], "location_keywords": ["india"]}` | the site's own job search, then each kept posting's HTML description and official closing date (`endDate`) |
+| amazon_jobs | `{"queries": ["software development engineer"], "country": "IND", "title_keywords": [...]}` | amazon.jobs public search |
+| microsoft_careers | `{"queries": [...], "location": "India", "seniority": ["Entry", "Mid-Level"], "title_keywords": [...]}` | apply.careers.microsoft.com `/api/pcsx` (robots.txt allows it) |
+| google_careers | `{"queries": [...], "location": "India", "target_level": ["EARLY"], "title_keywords": [...]}` | first results page per query only: robots.txt disallows paging. Fails loudly if Google changes its page data |
+| apple_jobs | `{"queries": [...], "location": "india-INDC", "title_keywords": [...], "max_pages": 3}` | jobs.apple.com search plus each matching job's details (qualifications); one requisition listed per city is one job. Fails loudly if Apple changes its page data. Meta is not covered (its terms forbid automated collection); Netflix had no India roles when checked |
+| atlassian_careers | `{"location_keywords": ["india"], "title_keywords": [...]}` | the complete listing Atlassian's careers page loads |
+
+Not collectable (checked 2026-10-18): **JPMorgan** (Oracle careers API and even its robots.txt answer 403 from a web
+application firewall: an anti-bot control, so JobPilot does not try), **Google sitemap** (none published), Lever
+boards for Atlassian (Atlassian uses iCIMS; its listing endpoint is used instead).
 
 **Add jobs manually**: paste a URL (Greenhouse/Lever links use their public APIs; others are read
 for JobPosting data), import CSV/JSON, or type the details in.
 
-Collection respects robots.txt, waits ≥2 s between requests to a host, uses timeouts and bounded
+Collection respects robots.txt (RFC 9309: the most specific rule wins, so `Disallow: /` plus
+`Allow: /api/jobs` permits `/api/jobs`), waits ≥2 s between requests to a host, uses timeouts and bounded
 retries, and records each source's last result. Jobs that disappear from a board are marked
 **expired**; when the same company/title/location reappears later it's flagged as a **repost**.
 Duplicates across sources are merged and every sighting is kept as provenance.
@@ -185,10 +205,32 @@ From a job page click **Start application**. The pipeline:
   version is frozen.
 - **Browser assist** (optional, `JOBPILOT_BROWSER_ENABLED=true`): opens the form in Chrome with a
   separate JobPilot profile. On Greenhouse and Lever forms it fills name, email, phone, location and
-  links from confirmed facts and attaches the resume. It **pauses** on CAPTCHA, login, MFA, consent,
-  legal/EEO questions and unknown questions, and it **never clicks submit**. If a confirmation page
-  appears, its text and a screenshot are saved as candidate evidence. Other sites: the page opens
-  and you use the manual workflow (copyable confirmed details on the application page).
+  links from confirmed facts, your **approved answers** (this application's, then close matches from the approved,
+  non-sensitive answer bank; drop-downs only when one option equals the answer exactly) and attaches the resume. It
+  **pauses** on CAPTCHA, login, MFA, consent, legal/EEO questions and unknown questions, and it **never clicks
+  submit**: you review and click Submit yourself. If a confirmation page appears, its text and a screenshot are saved
+  as candidate evidence. Other sites: the page opens and you use the manual workflow (copyable confirmed details on
+  the application page). This is the way through forms with a bot check (all Greenhouse boards checked).
+- JobPilot never submits applications for you: the automatic-application feature (autopilot) and its form rehearsal
+  were removed on 2026-10-23.
+
+### My tracker (applications you make yourself)
+
+**My tracker** (`/tracker`, or Telegram `/alljobs`, `/track`, `/applied`, `/company`, `/dream`) lists every job
+JobPilot found with its apply link — relevant, not-ineligible ones by default, everything with *include ineligible* —
+dream companies (⭐, `tracker.dream_companies`, FAANG by default) first. When you've applied yourself, mark it
+**✅ applied** with the resume you used and the date: the application is recorded as *applied* with confirmation method
+`self_reported` (your statement is the evidence). **⏳ not yet** asks again after `tracker.ask_again_days`;
+**🚫 not interested** dismisses the job.
+
+*Applications by company* shows each company's applications (status, date, resume), your last application there and
+its cooldown. Search by company name. Cooldowns are yours to set (`/cooldown amazon 90` or the form): companies rarely
+publish one, so none is assumed; with one set, the company shows *wait until <date>* or *ok to apply*.
+
+Employer emails then keep the status current (Gmail sync, headers only): a clear rejection / assessment / interview /
+offer subject updates the application by itself (undo on the tracker or the Telegram **↩️ Undo**); an unclear one is
+asked about on the tracker and in Telegram. Settings: `tracker` (dream companies, cooldowns, prompts per day, days
+before asking again, automatic outcomes on/off).
 
 ## 7. Interviews
 

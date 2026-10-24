@@ -23,7 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from jobpilot.models import Contact, EmailDraft, EmailTemplate, Job, ProfileLink, ResumeVersion, utcnow
+from jobpilot.models import (Contact, EmailDraft, EmailTemplate, Employment, Job, ProfileLink, Project,
+                             ResumeVersion, utcnow)
 from jobpilot.services import audit, contacts as contact_svc, profile as profile_svc, settings_store
 from jobpilot.services.profile import EMAIL_PATTERN
 
@@ -36,6 +37,7 @@ KIND_LABELS = {
     "follow_up": "Follow-up",
     "thank_you": "Thank-you (after interview)",
     "status_inquiry": "Application status inquiry",
+    "gmail_test": "Gmail connection test",
 }
 
 _SIGNATURE = "{{ candidate.full_name }}{% if candidate.email %}\n{{ candidate.email }}{% endif %}" \
@@ -47,11 +49,16 @@ BUILTIN_TEMPLATES: dict[str, dict[str, str]] = {
         "subject": "{{ job.title }} role at {{ company.name }}",
         "body": (
             "Hi {{ contact.first_name or 'there' }},\n\n"
-            "I'm {{ candidate.full_name }}{% if candidate.headline %}, {{ candidate.headline }}{% endif %}. "
+            "I'm {{ candidate.full_name }}"
+            "{% if candidate.current_role %}, {{ candidate.current_role }}"
+            "{% if candidate.experience %} ({{ candidate.experience }} of professional experience){% endif %}"
+            "{% elif candidate.headline %}, {{ candidate.headline }}{% endif %}. "
             "I'm interested in the {{ job.title }} position at {{ company.name }}"
             "{% if job.url %} ({{ job.url }}){% endif %}.\n\n"
             "{% if candidate.matching_skills %}My experience includes {{ candidate.matching_skills }}, which the posting "
-            "lists among its requirements.\n\n{% endif %}"
+            "asks for.{% if candidate.project %} {% endif %}{% endif %}"
+            "{% if candidate.project %}In a personal project I built {{ candidate.project }}.{% endif %}"
+            "{% if candidate.matching_skills or candidate.project %}\n\n{% endif %}"
             "{% if application.applied_on %}I applied on {{ application.applied_on }}. {% endif %}"
             "{% if resume.label %}My resume is attached. {% endif %}"
             "Would you be open to a short conversation about whether my background fits the role?\n\n"
@@ -143,11 +150,18 @@ def render(template: str, context: dict[str, Any]) -> tuple[str, list[str]]:
     return text, sorted(set(MISSING_RE.findall(text)))
 
 
+# Earlier built-in bodies: a stored built-in still equal to one of these (i.e. never edited by you) is refreshed.
+LEGACY_BUILTIN_BODIES = {"recruiter_outreach": [("Hi {{ contact.first_name or 'there' }},\n\nI'm {{ candidate.full_name }}{% if candidate.headline %}, {{ candidate.headline }}{% endif %}. I'm interested in the {{ job.title }} position at {{ company.name }}{% if job.url %} ({{ job.url }}){% endif %}.\n\n{% if candidate.matching_skills %}My experience includes {{ candidate.matching_skills }}, which the posting lists among its requirements.\n\n{% endif %}{% if application.applied_on %}I applied on {{ application.applied_on }}. {% endif %}{% if resume.label %}My resume is attached. {% endif %}Would you be open to a short conversation about whether my background fits the role?\n\nThank you for your time,\n") + _SIGNATURE]}
+
+
 def ensure_builtin_templates(session: Session) -> None:
-    existing = set(session.scalars(select(EmailTemplate.key)))
+    rows = {t.key: t for t in session.scalars(select(EmailTemplate))}
     for key, t in BUILTIN_TEMPLATES.items():
-        if key not in existing:
+        row = rows.get(key)
+        if row is None:
             session.add(EmailTemplate(key=key, name=t["name"], kind=key, subject=t["subject"], body=t["body"], builtin=True))
+        elif row.builtin and row.body != t["body"] and row.body in LEGACY_BUILTIN_BODIES.get(key, []):
+            row.body = t["body"]  # unedited built-in: take the improved text
     session.flush()
 
 
@@ -171,8 +185,24 @@ def build_context(session: Session, *, job: Job | None = None, contact: Contact 
     contact_first = None
     if contact and contact.name and contact.name.lower() not in ("recruiting team", "hiring team"):
         contact_first = contact.name.split()[0]
+    current = session.scalar(select(Employment).where(Employment.status == "confirmed", Employment.end_date.is_(None))
+                             .order_by(Employment.start_date.desc())) if confirmed else None
+    years = p.total_experience_years if confirmed else None
+    project = None
+    if confirmed and job_skills:  # one personal project that actually uses a skill this job asks for
+        from jobpilot.services.skills_taxonomy import extract_skills
+
+        for pr in session.scalars(select(Project).where(Project.status == "confirmed").order_by(Project.id)):
+            used = set(extract_skills(" ".join([pr.description or ""] + list(pr.technologies or []))))
+            if used & set(job_skills):
+                what = (pr.description or "").strip().splitlines()[0][:90] if pr.description else ""
+                project = f"{pr.name}" + (f" — {what[0].lower() + what[1:]}" if what else "")
+                break
     ctx = {
         "candidate": {
+            "current_role": f"{current.title} at {current.company}" if current and current.title else None,
+            "experience": (f"{years:g} year" + ("" if years == 1 else "s")) if years else None,
+            "project": project,
             "full_name": v("candidate.full_name (confirm your profile)", full_name),
             "first_name": v("candidate.first_name", (p.first_name or (full_name or "").split(" ")[0]) if confirmed else None),
             "email": p.email if confirmed else None,
@@ -212,6 +242,8 @@ class DraftCreate(BaseModel):
     application_id: int | None = None
     interview_id: int | None = None
     resume_version_id: int | None = None
+    # needed only to write to a second person about the same job (why this person is also relevant)
+    additional_contact_reason: str | None = Field(default=None, max_length=500)
 
 
 class DraftEdit(BaseModel):
@@ -240,6 +272,20 @@ def _related(session: Session, data: DraftCreate):
     return job, contact, application, interview
 
 
+def _check_duplicate_outreach(session: Session, contact: Contact, job: Job, data: DraftCreate) -> None:
+    """One outreach message per recruiter per job, and one recruiter per job unless you give a reason for another."""
+    live = ("draft", "approved", "sent")
+    same = session.scalar(select(EmailDraft).where(EmailDraft.contact_id == contact.id, EmailDraft.job_id == job.id,
+                                                   EmailDraft.kind.in_(OUTREACH_KINDS), EmailDraft.status.in_(live)))
+    if same is not None:
+        raise DraftError(f"{contact.display_name} already has outreach draft #{same.id} ({same.status}) for this job")
+    other = session.scalar(select(EmailDraft).where(EmailDraft.job_id == job.id, EmailDraft.contact_id != contact.id,
+                                                    EmailDraft.kind.in_(OUTREACH_KINDS), EmailDraft.status.in_(live)))
+    if other is not None and not (data.additional_contact_reason or "").strip():
+        raise DraftError(f"Draft #{other.id} already contacts someone about this job. To write to a second person, "
+                         "give the reason (e.g. 'the first recruiter covers a different team')")
+
+
 def create_draft(session: Session, data: DraftCreate, previous: EmailDraft | None = None) -> EmailDraft:
     ensure_builtin_templates(session)
     tpl = session.scalar(select(EmailTemplate).where(EmailTemplate.key == data.template_key, EmailTemplate.active.is_(True)))
@@ -252,6 +298,8 @@ def create_draft(session: Session, data: DraftCreate, previous: EmailDraft | Non
         blocked = contact_svc.is_blocked(session, contact.email, contact.company_id)
         if blocked:
             raise DraftError(blocked)
+    if tpl.kind in OUTREACH_KINDS and contact is not None and job is not None and previous is None:
+        _check_duplicate_outreach(session, contact, job, data)
     if tpl.kind == "referral_request":
         if contact is None or contact.role_type != "referral" or not contact.relationship_note:
             raise DraftError("Referral requests need a referral contact whose relationship you have described")
@@ -298,6 +346,9 @@ def edit_draft(session: Session, draft: EmailDraft, data: DraftEdit) -> EmailDra
         # A Gmail draft holds the old content; sending it would deliver text you didn't approve.
         # Forget it so "send" builds a fresh Gmail draft from the re-approved content.
         stale_gmail_draft, draft.gmail_draft_id = draft.gmail_draft_id, None
+        if stale_gmail_draft:
+            draft.gmail_stale_draft_id, draft.gmail_status = stale_gmail_draft, "outdated"
+            draft.gmail_content_hash = None
     draft.to_address = data.to_address.lower() if data.to_address else None
     draft.subject, draft.body = data.subject, data.body
     draft.missing_fields = sorted(set(MISSING_RE.findall(data.subject + "\n" + data.body)))
@@ -334,11 +385,19 @@ def recipient_warnings(draft: EmailDraft) -> list[str]:
         return []
     if c is None or (c.email or "").lower() != draft.to_address.lower():
         return ["recipient address is not linked to a contact record — check it carefully"]
+    out = []
+    if c.email_status == "bounced":
+        return ["mail to this address BOUNCED — it will not be sent"]
     if c.email_status == "guessed":
-        return ["this address is GUESSED, not verified — it may reach the wrong person"]
-    if c.email_status == "unverified":
-        return [f"address is unverified (source: {c.source_type}{', ' + c.source_url if c.source_url else ''})"]
-    return []
+        out.append("this address is GUESSED, not verified — it may reach the wrong person")
+    elif c.email_status == "unverified":
+        out.append(f"address is unverified (source: {c.source_type}{', ' + c.source_url if c.source_url else ''})")
+    elif c.email_status == "apollo_reported":
+        out.append("address reported valid by Apollo; JobPilot has not confirmed it")
+    warn = contact_svc.domain_warning(c)
+    if warn:
+        out.append(warn)
+    return out
 
 
 def approve(session: Session, draft: EmailDraft, acknowledge_guessed: bool = False) -> EmailDraft:
@@ -356,7 +415,11 @@ def approve(session: Session, draft: EmailDraft, acknowledge_guessed: bool = Fal
 
 
 def mark_sent(session: Session, draft: EmailDraft, via: str = "manual", when=None) -> EmailDraft:
-    """Record that an approved draft was sent (by you, or via Gmail)."""
+    """Record that an approved draft was sent.
+
+    ``via="manual"``: your own statement that you sent it (JobPilot did not send it and has no proof it was sent).
+    ``via="gmail"``: only from a Gmail API response (see ``integrations.gmail``).
+    """
     if draft.status != "approved":
         raise DraftError("Only approved drafts can be marked as sent")
     cfg = settings_store.get(session, "outreach")

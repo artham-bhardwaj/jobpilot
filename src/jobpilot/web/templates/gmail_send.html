@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge %}
+{% block title %}Send draft #{{ d.id }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/drafts/{{ d.id }}">← Draft #{{ d.id }}</a></p>
+<header class="page-head"><h1>Send via Gmail</h1>
+<p class="lede">Check every detail. This sends one real email from your Gmail account. It cannot be undone.</p></header>
+<section class="card">
+  <table class="kv">
+    <tr><th scope="row">To</th><td><b>{{ preview.to or "—" }}</b></td></tr>
+    <tr><th scope="row">Subject</th><td>{{ preview.subject }}</td></tr>
+    <tr><th scope="row">Attachment</th><td>{% if preview.attachment %}{{ preview.attachment.filename }} · {{ "{:,}".format(preview.attachment.size) }} bytes · {{ preview.attachment.content_type }}{% else %}none{% endif %}</td></tr>
+    <tr><th scope="row">Gmail draft</th><td>{% if d.gmail_status == "created" %}{{ badge("in Gmail Drafts", "b-ok") }} {{ d.gmail_draft_id }}{% else %}{{ badge("none yet", "b-none") }} created first, then sent{% endif %}</td></tr>
+  </table>
+  <div class="desc">{{ d.body }}</div>
+</section>
+{% if not ready.ready %}<div class="notice bad" role="alert">Gmail unavailable: {{ ready.problems|join("; ") }}</div>
+{% elif preview.problems %}<div class="notice bad" role="alert">Cannot send: {{ preview.problems|join("; ") }}</div>
+{% else %}
+<form method="post" action="/gmail/drafts/{{ d.id }}/send" class="card confirm">
+  <input type="hidden" name="confirm" value="SEND">
+  <input type="hidden" name="content_hash" value="{{ preview.content_hash }}">
+  <label class="checkbox"><input type="checkbox" name="ack" value="1" required> I have checked the recipient, subject, text and attachment, and I want to send this email now.</label>
+  <div class="actions"><button class="danger">Send now via Gmail</button> <a class="button" href="/drafts/{{ d.id }}">Cancel</a></div>
+</form>
+{% endif %}
+{% endblock %}

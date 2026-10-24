@@ -3,47 +3,58 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>{% block title %}JobPilot{% endblock %} · JobPilot</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232f5bd3'/%3E%3Cpath d='M5 4h6v2H9v5a2 2 0 0 1-4 0h2V6H5z' fill='white'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%233a10e5'/%3E%3Cpath d='M5 4h6v2H9v5a2 2 0 0 1-4 0h2V6H5z' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
 {% set nav = [
-  ("Overview", "/", "Home"),
-  ("Jobs", "/jobs", "Work"),
-  ("Matching", "/matching", "Work"),
-  ("Review queue", "/review", "Work"),
-  ("Applications", "/applications", "Work"),
-  ("Answer bank", "/answers", "Work"),
-  ("Interviews", "/interviews", "Work"),
-  ("Information hub", "/hub", "You"),
+  ("Overview", "/", "Apply"),
+  ("Jobs", "/jobs", "Apply"),
+  ("My tracker", "/tracker", "Apply"),
+  ("Applications", "/applications", "Apply"),
+  ("Interviews", "/interviews", "Apply"),
   ("Profile", "/profile", "You"),
   ("Resumes", "/resumes", "You"),
+  ("Information hub", "/hub", "You"),
   ("Skill gaps", "/skills", "You"),
-  ("Recruiters", "/contacts", "Outreach"),
-  ("Companies", "/companies", "Outreach"),
-  ("Email drafts", "/drafts", "Outreach"),
-  ("Analytics", "/analytics", "Insight"),
-  ("Sources", "/sources", "System"),
-  ("Settings", "/settings", "System"),
-  ("System", "/system", "System"),
+  ("Answer bank", "/answers", "You"),
+  ("Review queue", "/review", "Assist & outreach"),
+  ("Matching", "/matching", "Assist & outreach"),
+  ("Recruiters", "/contacts", "Assist & outreach"),
+  ("Companies", "/companies", "Assist & outreach"),
+  ("Email drafts", "/drafts", "Assist & outreach"),
+  ("Analytics", "/analytics", "Setup"),
+  ("Sources", "/sources", "Setup"),
+  ("Settings", "/settings", "Setup"),
+  ("System", "/system", "Setup"),
 ] %}
-<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+{# Pages without their own nav entry highlight their parent section. #}
+{% set path = request.url.path %}
+{% set alias = {"/gmail": "/settings", "/telegram": "/settings", "/calibration": "/matching"} %}
+{% set ns = namespace(current=None) %}
+{% for label, href, group in nav %}
+  {% if (href == "/" and path == "/") or (href != "/" and (path == href or path.startswith(href ~ "/"))) %}{% set ns.current = href %}{% endif %}
+{% endfor %}
+{% for prefix, target in alias.items() %}{% if ns.current is none and path.startswith(prefix) %}{% set ns.current = target %}{% endif %}{% endfor %}
+<a class="skip-link" href="#main">Skip to content</a>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Show navigation">
 <header class="topbar">
-  <label for="nav-toggle" class="hamburger" aria-hidden="true">☰</label>
-  <a href="/" class="brand">JobPilot</a>
-  <span class="topbar-note">local · {{ settings.host }}</span>
+  <label for="nav-toggle" class="hamburger" title="Menu"><span aria-hidden="true">☰</span><span class="visually-hidden">Menu</span></label>
+  <a href="/" class="brand"><span class="brand-mark" aria-hidden="true">J</span>JobPilot</a>
+  <span class="topbar-note">Local · {{ settings.host }}</span>
 </header>
-<nav class="sidebar">
-  {% set ns = namespace(group=None) %}
+<nav class="sidebar" aria-label="Main">
+  {% set g = namespace(group=None) %}
   {% for label, href, group in nav %}
-    {% if group != ns.group %}<div class="nav-group">{{ group }}</div>{% set ns.group = group %}{% endif %}
-    {% set active = (href == "/" and request.url.path == "/") or (href != "/" and request.url.path.startswith(href)) %}
-    <a href="{{ href }}" class="{{ 'active' if active }}">{{ label }}</a>
+    {% if group != g.group %}<div class="nav-group" role="presentation">{{ group }}</div>{% set g.group = group %}{% endif %}
+    <a href="{{ href }}"{% if href == ns.current %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
   {% endfor %}
 </nav>
-<main class="content">
+<label for="nav-toggle" class="nav-scrim" aria-hidden="true"></label>
+<main class="content" id="main" tabindex="-1">
   {% if msg %}<div class="flash ok" role="status">{{ msg }}</div>{% endif %}
   {% if err %}<div class="flash err" role="alert">{{ err }}</div>{% endif %}
   {% block content %}{% endblock %}

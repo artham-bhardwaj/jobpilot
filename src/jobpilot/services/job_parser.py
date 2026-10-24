@@ -25,9 +25,25 @@ _OTHER_HEAD = re.compile(
     r"(benefits|perks|what we offer|about us|about the company|our culture|compensation|equal opportunity|"
     r"responsibilities|what you.ll do|the role|about the role|day to day|why join)", re.I)
 
+_RANGE_SEP = r"(?:-|–|—|to)"
+# "3-6 years of experience", "8+ years of relevant experience"
 _YEARS = re.compile(
-    r"(?P<min>\d{1,2}(?:\.\d)?)\s*(?:\+|plus)?\s*(?:(?:-|–|to)\s*(?P<max>\d{1,2}(?:\.\d)?)\s*)?\+?\s*"
-    r"(?:years?|yrs?)(?:'|’)?\s*(?:of\s+)?(?:[a-z/\-+#. ]{0,40}?)?\s*(?:experience|exp\b)",
+    rf"(?P<min>\d{{1,2}}(?:\.\d)?)\s*(?:\+|plus)?\s*(?:{_RANGE_SEP}\s*(?P<max>\d{{1,2}}(?:\.\d)?)\s*)?\+?\s*"
+    # up to 60 characters of qualifier ("non-internship professional software development"), within one sentence
+    r"(?:years?|yrs?)(?:'|’)?\s*(?:of\s+)?(?:(?:[a-z/\-+#]|\.(?!\s)|[ \t]){0,60}?)?\s*(?:experience|exp\b)",
+    re.I,
+)
+# "0 to 12 months of experience", "6 months of experience" (converted to years)
+_EXP_MONTHS = re.compile(
+    rf"(?P<min>\d{{1,2}})\s*(?:\+|plus)?\s*(?:{_RANGE_SEP}\s*(?P<max>\d{{1,2}})\s*)?\+?\s*"
+    r"months?(?:'|’)?\s*(?:of\s+)?(?:[a-z/\-+#. ]{0,40}?)?\s*(?:experience|exp\b)",
+    re.I,
+)
+# Reversed order: "experience of 8–12 years", "experience: 3+ years", "experience of at least 2 years"
+_YEARS_REVERSED = re.compile(
+    rf"(?:experience|exp\.?)\s*(?:of|:|-|–|—)?\s*(?:at least|minimum(?: of)?|min\.?)?\s*"
+    rf"(?P<min>\d{{1,2}}(?:\.\d)?)\s*(?:\+|plus)?\s*(?:{_RANGE_SEP}\s*(?P<max>\d{{1,2}}(?:\.\d)?)\s*)?\+?\s*"
+    r"(?:years?|yrs?)\b",
     re.I,
 )
 _YEARS_MIN_WORDS = re.compile(r"(?:minimum|at least|min\.?)\s+(?:of\s+)?(?P<min>\d{1,2})\s*(?:years?|yrs?)", re.I)
@@ -40,7 +56,9 @@ _AUTH_REQ = re.compile(r"(must be (?:legally )?authori[sz]ed to work|work author
 _SPONSOR_YES = re.compile(r"(visa sponsorship (?:is )?available|we (?:will|can) sponsor|sponsorship provided)", re.I)
 _LOCATED = re.compile(r"((?:must|should) (?:be )?(?:located|based|reside|live) in [^.\n;]{2,60})", re.I)
 _RELOCATE = re.compile(r"(relocation (?:assistance|support|package) (?:is )?(?:available|provided|offered))", re.I)
-_DEGREE = re.compile(r"\b(bachelor'?s?|master'?s?|b\.\s?tech|btech|b\.e\.|b\.s\.|b\.?sc|m\.\s?tech|mtech|m\.s\.|"
+# "master" alone is usually the verb ("eagerness to master a front end stack"): a degree only as Master's / Masters or
+# "Master of / degree / in".
+_DEGREE = re.compile(r"\b(bachelor'?s?|master(?:'s|’s|s)|master(?=\s+(?:of|degree|in)\b)|b\.\s?tech|btech|b\.e\.|b\.s\.|b\.?sc|m\.\s?tech|mtech|m\.s\.|"
                      r"ph\.?d|(?:university |college )?degree)(?![a-z])\s*(?:degree\s+)?(?:in|of)?\s*([A-Za-z ,/&]{0,60})", re.I)
 _REMOTE = re.compile(r"\b(fully remote|100% remote|remote[- ]first|remote(?: position| role| work)?|work from home|wfh)\b", re.I)
 _HYBRID = re.compile(r"\bhybrid\b", re.I)
@@ -127,16 +145,36 @@ def split_sections(text: str) -> tuple[str, str, str]:
     return "\n".join(required), "\n".join(preferred), "\n".join(other)
 
 
+# "… or 0 years of work experience with a PhD": a figure that applies only to holders of an advanced degree.
+_ADVANCED_DEGREE_ONLY = re.compile(
+    r"^[\s,]*(?:[a-z ]{0,20})?\b(?:with|holding|for candidates with|given)\s+(?:an?\s+|the\s+)?"
+    r"(?:ph\.?\s?d\.?|doctorate|doctoral degree|advanced degree|graduate degree|master'?s?(?: degree)?|mba|jd|md)\b",
+    re.I)
+
+
 def parse_experience(text: str) -> tuple[float | None, float | None, str | None]:
+    """(min years, max years, snippet) of the stated experience requirement; (None, None, None) if none is stated.
+
+    An explicit zero ("0 to 12 months of experience") is (0.0, 1.0, …), never confused with "not stated". Months are
+    converted to years (the stored unit).
+    """
     best: tuple[float, float | None, str] | None = None
-    for m in _YEARS.finditer(text):
-        lo = float(m.group("min"))
-        hi = float(m.group("max")) if m.group("max") else None
+    candidates = []
+    matches = [(m, 1.0) for m in _YEARS.finditer(text)] + [(m, 12.0) for m in _EXP_MONTHS.finditer(text)] + \
+        [(m, 1.0) for m in _YEARS_REVERSED.finditer(text)]
+    for m, per_year in matches:
+        lo = round(float(m.group("min")) / per_year, 2)
+        hi = round(float(m.group("max")) / per_year, 2) if m.group("max") else None
         if lo > 30 or (hi is not None and hi < lo):
             continue
+        advanced_only = bool(_ADVANCED_DEGREE_ONLY.match(text[m.end():m.end() + 60]))
+        candidates.append((lo, hi, m.group(0).strip(), advanced_only))
+    # Figures stated only for PhD/Master's holders are alternatives, not the general requirement.
+    general = [c for c in candidates if not c[3]] or candidates
+    for lo, hi, snippet, _ in general:
         # Prefer the smallest stated minimum (the overall requirement is usually the lowest).
         if best is None or lo < best[0]:
-            best = (lo, hi, m.group(0).strip())
+            best = (lo, hi, snippet)
     if best is None:
         m = _YEARS_MIN_WORDS.search(text)
         if m:
@@ -209,7 +247,9 @@ _MUST_CUE = re.compile(r"(?<!not )\b(must|mandatory|required)\b", re.I)
 _EXAMPLE_CUE = re.compile(r"(?<![a-z])(such as|e\.g\.?|eg\.|for example|for instance)(?![a-z])", re.I)
 _INTEREST_CUE = re.compile(
     r"\b(interest(?:ed)?(?: (?:or|and/or|and) (?:experience|background|familiarity))? in|passion(?:ate)? (?:for|about)|"
-    r"curiosity (?:about|for)|enthusiasm for|(?:eager|eagerness|willing|willingness|keen|desire) to learn)\b", re.I)
+    r"curiosity (?:about|for)|enthusiasm for|(?:eager|eagerness|willing|willingness|keen|desire) to learn|"
+    # what you will learn on the job is not something you must already have ("Learn and use math, statistics…")
+    r"learn and (?:use|apply)|you(?:'ll| will) learn|opportunit(?:y|ies) to learn)\b", re.I)
 _SPAN_END = re.compile(r";|,\s+and\b|\.\s|$")
 _RESP_CUE = re.compile(r"\b(you will|you'll|you will be|build|develop|design|implement|maintain|own|work on|write)\b", re.I)
 _INCIDENTAL = re.compile(r"\b(our (?:tech )?stack|tech stack|we use|we're using|built (?:on|with)|powered by|our platform|"
@@ -299,6 +339,10 @@ def classify_skills(title: str, text: str, company: str | None = None) -> tuple[
             kind, basis, where = "mentioned", "explicit", "company/stack description (not a requirement)"
         elif _PREF_CUE.search(sentence) and not _MUST_CUE.search(sentence):
             kind, basis, where = "preferred", "explicit", "preference wording"
+        elif _REQ_CUE.search(sentence) and has_req and not _MUST_CUE.search(sentence):
+            # The posting states its requirements in their own section; general wording elsewhere ("we're looking
+            # for engineers who bring ideas from all areas, including system design…") is not one.
+            kind, basis, where = "mentioned", "explicit", "outside the requirements section (not a stated requirement)"
         elif _REQ_CUE.search(sentence):
             kind, basis, where = "required", "explicit", "requirement wording"
         elif not has_req and _RESP_CUE.search(sentence):

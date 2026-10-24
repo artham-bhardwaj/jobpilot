@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
-from jobpilot.services.text_utils import clean_ws, html_to_text
+from jobpilot.services.text_utils import clean_ws, description_to_text, html_to_text
 from jobpilot.sources.ats import GreenhouseAdapter, LeverAdapter
 from jobpilot.sources.base import FetchResult, JobData, parse_deadline, parse_dt
 from jobpilot.sources.http import PoliteHttp, is_temporary
+
+log = logging.getLogger(__name__)
 
 MAX_PAGES_PER_SOURCE = 50
 
@@ -45,8 +49,12 @@ def _location(posting: dict) -> str | None:
     for loc in _as_list(posting.get("jobLocation")):
         addr = loc.get("address") if isinstance(loc, dict) else None
         if isinstance(addr, dict):
-            bits = [addr.get("addressLocality"), addr.get("addressRegion"), _country(addr.get("addressCountry"))]
-            parts.append(", ".join(b for b in bits if b))
+            local = [addr.get("addressLocality"), addr.get("addressRegion")]
+            country = _country(addr.get("addressCountry"))
+            # Some sites already put the country in the locality ("Bengaluru, India"): don't repeat it.
+            if country and any(country.lower() in str(b or "").lower() for b in local):
+                country = None
+            parts.append(", ".join(str(b) for b in local + [country] if b))
         elif isinstance(addr, str):
             parts.append(addr)
     for req in _as_list(posting.get("applicantLocationRequirements")):
@@ -93,7 +101,7 @@ def posting_to_job(posting: dict, page_url: str, company_name: str | None = None
         company_name=company_name or org_name,
         location=_location(posting),
         remote_type=remote,
-        description_text=html_to_text(posting.get("description") or ""),
+        description_text=description_to_text(posting.get("description") or ""),
         description_raw=posting.get("description") or None,
         posted_at=parse_dt(posting.get("datePosted")),
         valid_through=deadline,
@@ -140,6 +148,35 @@ def extract_from_html(html_text: str, page_url: str, company_name: str | None = 
         ["No structured JobPosting data; extracted page title and text only — please review the details"]
 
 
+_WORKDAY_JOB = re.compile(r"^https://(?P<tenant>[a-z0-9-]+)\.(?P<wd>wd\d+)\.myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?"
+                          r"(?P<site>[A-Za-z0-9_-]+)/(?P<rest>job/.+)$")
+
+
+def enrich_workday(http: PoliteHttp, job: JobData) -> JobData:
+    """Workday's JobPosting markup flattens the description into one line (headings, bullets and line breaks lost),
+    so requirements can't be told from preferences. The same site's job API (robots.txt allows it; it is what the
+    posting page itself loads) has the description as HTML: use that. Any failure keeps the JobPosting text."""
+    m = _WORKDAY_JOB.match((job.source_url or "").split("?")[0])
+    if not m or (job.description_text and "\n" in job.description_text):
+        return job
+    api = (f"https://{m['tenant']}.{m['wd']}.myworkdayjobs.com/wday/cxs/{m['tenant']}/{m['site']}/{m['rest']}")
+    try:
+        info = (http.get_json(api) or {}).get("jobPostingInfo") or {}
+    except Exception as exc:  # the JobPosting data is still usable
+        log.info("workday description unavailable", extra={"url": api, "error": str(exc)[:200]})
+        return job
+    html_desc = info.get("jobDescription")
+    if not isinstance(html_desc, str) or not html_desc.strip():
+        return job
+    text = description_to_text(html_desc)
+    if len(text) < 0.5 * len(job.description_text or ""):  # implausibly short: keep what we had
+        return job
+    job.raw = {**(job.raw or {}), "description_source": "workday job API (HTML)",
+               "jsonld_description_chars": len(job.description_text or "")}
+    job.description_raw, job.description_text = html_desc, text
+    return job
+
+
 class JsonLdAdapter:
     kind = "jsonld"
     label = "Career pages (schema.org JobPosting)"
@@ -167,7 +204,7 @@ class JsonLdAdapter:
             try:
                 r = http.get(url, accept="text/html")
                 jobs, warnings = extract_from_html(r.text, r.url or url, company_name)
-                result.items.extend(jobs)
+                result.items.extend(enrich_workday(http, j) for j in jobs)
                 result.errors.extend(f"{url}: {w}" for w in warnings)
             except Exception as exc:  # one bad page should not stop the rest
                 if getattr(exc, "status", None) in (404, 410):
@@ -178,8 +215,98 @@ class JsonLdAdapter:
         return result
 
 
+class SitemapAdapter:
+    """Job pages listed in a career site's own sitemap (the one its robots.txt points to).
+
+    Reads the sitemap, keeps posting URLs whose URL text matches your title keywords (and optional location
+    keywords), then reads at most ``max_pages`` of those pages for their schema.org JobPosting data, exactly like
+    the career-page source. Works for any site that publishes a sitemap and JobPosting markup, e.g. Workday career
+    sites (``https://<tenant>.wd<N>.myworkdayjobs.com/<site>/siteMap.xml``).
+
+    - Only URLs on the sitemap's own host are fetched; robots.txt and per-host rate limits apply to every request.
+    - Sitemaps may list only part of the openings (Workday's list about 100), so jobs missing from a run are never
+      expired from it; a posting page that answers 404/410 is.
+    """
+
+    kind = "sitemap"
+    label = "Career-site sitemap (JobPosting pages)"
+    config_help = ('{"sitemap_url": "https://<tenant>.wd5.myworkdayjobs.com/<site>/siteMap.xml", '
+                   '"title_keywords": ["software engineer", "backend"], "location_keywords": ["india"], '
+                   '"exclude_keywords": ["director"], "max_pages": 25}')
+    MAX_SITEMAP_URLS = 5000
+
+    def validate_config(self, config: dict) -> dict:
+        url = str(config.get("sitemap_url") or "").strip()
+        parts = urlsplit(url)
+        if parts.scheme != "https" or not parts.netloc or not parts.path.lower().endswith(".xml"):
+            raise ValueError("sitemap_url must be an https URL of an .xml sitemap")
+
+        def words(key: str, required: bool = False) -> list[str]:
+            v = config.get(key) or []
+            if isinstance(v, str):
+                v = [x for x in re.split(r"[,\n]", v)]
+            out = [_slug_text(str(x)) for x in v if _slug_text(str(x))]
+            if required and not out:
+                raise ValueError(f"{key}: at least one keyword is required (only matching postings are read)")
+            return out
+
+        try:
+            max_pages = int(config.get("max_pages") or 25)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("max_pages must be a number") from exc
+        if not 1 <= max_pages <= MAX_PAGES_PER_SOURCE:
+            raise ValueError(f"max_pages must be between 1 and {MAX_PAGES_PER_SOURCE}")
+        return {"sitemap_url": url, "title_keywords": words("title_keywords", True),
+                "location_keywords": words("location_keywords"), "exclude_keywords": words("exclude_keywords"),
+                "max_pages": max_pages}
+
+    def select(self, config: dict, locs: list[str]) -> tuple[list[str], int]:
+        """(posting URLs to read, how many matched before the page cap)."""
+        host = urlsplit(config["sitemap_url"]).netloc.lower()
+        matched = []
+        for loc in dict.fromkeys(locs):  # keeps order, drops repeats
+            parts = urlsplit(loc)
+            if parts.scheme != "https" or parts.netloc.lower() != host:
+                continue
+            text = _slug_text(parts.path)
+            if not any(_has_phrase(text, k) for k in config["title_keywords"]):
+                continue
+            if config["location_keywords"] and not any(_has_phrase(text, k) for k in config["location_keywords"]):
+                continue
+            if any(_has_phrase(text, k) for k in config["exclude_keywords"]):
+                continue
+            matched.append(loc)
+        return matched[:config["max_pages"]], len(matched)
+
+    def fetch(self, http: PoliteHttp, config: dict, company_name: str | None) -> FetchResult:
+        cfg = self.validate_config(config)
+        r = http.get(cfg["sitemap_url"], accept="application/xml, text/xml")
+        locs = [html.unescape(m) for m in _LOC.findall(r.text)][:self.MAX_SITEMAP_URLS]
+        if not locs:
+            return FetchResult(method="sitemap", errors=["The sitemap contains no URLs (or is not a sitemap)"])
+        urls, matched = self.select(cfg, locs)
+        result = JsonLdAdapter().fetch(http, {"urls": urls}, company_name) if urls else FetchResult(method="html")
+        result.method, result.full_snapshot = "sitemap", False
+        result.counts = {"sitemap_urls": len(locs), "matched": matched, "read": len(urls)}
+        result.notes.append(f"sitemap lists {len(locs)} posting(s); {matched} matched your keywords; read {len(urls)}"
+                            + (f" (max_pages {cfg['max_pages']})" if matched > len(urls) else ""))
+        return result
+
+
+_LOC = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
+
+
+def _slug_text(s: str) -> str:
+    return clean_ws(re.sub(r"[^a-z0-9+#]+", " ", s.lower()))
+
+
+def _has_phrase(text: str, phrase: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", text) is not None
+
+
 _GH_URL = re.compile(r"https?://(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/(?:embed/job_app\?for=)?([A-Za-z0-9_.-]+)/jobs/(\d+)")
 _GH_EMBED = re.compile(r"[?&]for=([A-Za-z0-9_.-]+).*?[?&]token=(\d+)")
+_GH_BOARD = re.compile(r"https?://(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/[A-Za-z0-9_.-]+/?(?:\?.*)?$")
 _LEVER_URL = re.compile(r"https?://jobs\.(?:eu\.)?lever\.co/([A-Za-z0-9_.-]+)/([A-Za-z0-9-]{8,64})")
 
 
@@ -201,11 +328,18 @@ def fetch_url(http: PoliteHttp, url: str, company_name: str | None = None) -> tu
     if m:
         job = LeverAdapter().fetch_one(http, m.group(1), m.group(2), company_name)
         return job, [], "api"
+    if _GH_BOARD.match(url):
+        raise ValueError("That is a Greenhouse board's list of openings, not a job posting: paste one job's URL, "
+                         "or add the board as a Greenhouse source")
     r = http.get(url, accept="text/html")
-    jobs, warnings = extract_from_html(r.text, r.url or url, company_name)
+    final = r.url or url
+    if _GH_BOARD.match(final) or ("greenhouse.io" in final and "error=true" in final):
+        # Greenhouse redirects a closed or unknown posting to the board index with ?error=true.
+        raise ValueError("Greenhouse no longer shows that posting (it redirected to the board's list of openings)")
+    jobs, warnings = extract_from_html(r.text, final, company_name)
     if not jobs:
         raise ValueError("; ".join(warnings) or "No job found at URL")
-    job = jobs[0]
+    job = enrich_workday(http, jobs[0])
     if job.apply_url and not urlsplit(job.apply_url).netloc:
         job.apply_url = urljoin(url, job.apply_url)
     if len(jobs) > 1:

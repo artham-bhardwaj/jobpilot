@@ -2,76 +2,160 @@
 {% from "_macros.html" import badge, empty, score %}
 {% block title %}Overview{% endblock %}
 {% block content %}
-<h1>Overview</h1>
+<header class="page-head">
+  <div><h1>Overview</h1>
+  <p class="lede">What needs you now, and where your search stands. Every number links to the records behind it.</p></div>
+  <div class="actions"><a class="button" href="/jobs/new">Add a job</a> <a class="button" href="/review">Review queue</a> <a class="button primary" href="/jobs?applied=no&min_score={{ ready.threshold }}">Jobs to apply to</a></div>
+</header>
+
+<section class="card ready" id="ready">
+  <h2>Ready to apply <span class="muted small">· {{ ready.total }} relevant job(s) you haven't applied to (score ≥ {{ ready.threshold }})</span></h2>
+  {% if ready.jobs %}
+  <ul class="ready-list">
+    {% for j in ready.jobs %}{% set link = j.apply_url or j.source_url %}
+    <li>
+      {{ score(j.relevance_score) }}
+      <div class="ready-main"><a href="/jobs/{{ j.id }}"><b>{{ j.title }}</b></a>
+        <div class="meta">{{ j.company_name or "?" }}{% if j.location %} · {{ j.location }}{% endif %} {{ j|region_badges }} {% if j.eligibility != "eligible" %}{{ badge(j.eligibility) }}{% endif %}</div></div>
+      <div class="row-actions">
+        {% if link %}<a class="button small primary" href="{{ link }}" target="_blank" rel="noopener noreferrer">apply ↗</a>{% endif %}
+        <a class="button small" href="/jobs/{{ j.id }}#apply">record / resume</a>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% if ready.total > ready.jobs|length %}<p class="small"><a href="/jobs?applied=no&min_score={{ ready.threshold }}">See all {{ ready.total }} →</a></p>{% endif %}
+  {% else %}{{ empty("Nothing waiting. You've applied to (or dismissed) every relevant job JobPilot has found.") }}{% endif %}
+</section>
+
+{% if stats.next_item %}
+<section class="next-action" aria-label="Next action">
+  <span class="label">Next:</span>
+  <div class="body">
+    {% if stats.next_item.link %}<a href="{{ stats.next_item.link }}"><b>{{ stats.next_item.title }}</b></a>{% else %}<b>{{ stats.next_item.title }}</b>{% endif %}
+    <span class="muted small">· {{ stats.next_item.category_label }}</span>
+    <div class="small">{{ stats.next_item.recommended }}</div>
+  </div>
+  {% if stats.review_count > 1 %}<a href="/review" class="button small">{{ stats.review_count - 1 }} more to review →</a>{% endif %}
+</section>
+{% endif %}
 
 {% set todo = stats.setup|rejectattr(1)|list %}
 {% if todo %}
 <section class="card">
   <h2>Getting started</h2>
   <ul class="checklist">
-    {% for label, done, href in stats.setup %}<li>{{ "✔" if done else "☐" }} {% if done %}<span class="muted">{{ label }}</span>{% else %}<a href="{{ href }}">{{ label }}</a>{% endif %}</li>{% endfor %}
+    {% for label, done, href in stats.setup %}<li>{% if done %}<span aria-hidden="true">✔</span> <span class="muted">{{ label }}</span> <span class="visually-hidden">(done)</span>{% else %}<span aria-hidden="true">☐</span> <a href="{{ href }}">{{ label }}</a> <span class="visually-hidden">(to do)</span>{% endif %}</li>{% endfor %}
   </ul>
   <p class="muted small">Nothing personal is required. JobPilot only uses facts you confirm.</p>
 </section>
-{% endif %}
-
-{% if stats.next_item %}<div class="notice"><b>Next:</b> {% if stats.next_item.link %}<a href="{{ stats.next_item.link }}">{{ stats.next_item.title }}</a>{% else %}{{ stats.next_item.title }}{% endif %}
-  <span class="muted">({{ stats.next_item.category_label }})</span> — {{ stats.next_item.recommended }}
-  {% if stats.review_count > 1 %}<a href="/review" class="small">and {{ stats.review_count - 1 }} more →</a>{% endif %}</div>
-{% elif not todo %}<div class="notice">Nothing needs your attention right now.</div>{% endif %}
-
-<div class="stats">
-  <div class="stat"><a href="/review?category=submission_approval"><div class="v">{{ stats.awaiting_approval }}</div><div class="l">awaiting your approval</div></a></div>
-  <div class="stat"><a href="#deadlines"><div class="v">{{ stats.deadlines_count }}</div><div class="l">deadlines in the next 14 days</div></a></div>
-  <div class="stat"><a href="/sources"><div class="v">{{ stats.source_failures|length }}</div><div class="l">failing sources · last discovery {{ stats.last_discovery|dt if stats.last_discovery else "never" }}</div></a></div>
-  <div class="stat"><a href="/jobs"><div class="v">{{ stats.jobs_active }}</div><div class="l">active jobs ({{ stats.jobs_new_7d }} new this week)</div></a></div>
-  <div class="stat"><a href="/jobs?min_score={{ stats.threshold }}"><div class="v">{{ stats.jobs_relevant }}</div><div class="l">relevant (score ≥ {{ stats.threshold }})</div></a></div>
-  <div class="stat"><a href="/jobs?user_status=shortlisted"><div class="v">{{ stats.shortlisted }}</div><div class="l">shortlisted</div></a></div>
-  <div class="stat"><a href="/applications"><div class="v">{{ stats.in_progress }}</div><div class="l">applications in preparation</div></a></div>
-  <div class="stat"><a href="/applications"><div class="v">{{ stats.submitted }}</div><div class="l">submitted</div></a></div>
-  <div class="stat"><a href="/review"><div class="v">{{ stats.review_count }}</div><div class="l">items to review</div></a></div>
-  <div class="stat"><a href="/drafts"><div class="v">{{ stats.followups_due }}</div><div class="l">follow-ups due</div></a></div>
-  <div class="stat"><a href="/interviews"><div class="v">{{ stats.upcoming|length }}</div><div class="l">upcoming interviews</div></a></div>
-</div>
-
-<section class="card">
-  <h2>Pipeline</h2>
-  <div class="actions" style="margin-top:0">{% for label, n, href in stats.funnel %}<a class="button" href="{{ href }}">{{ label }}: <b>{{ n }}</b></a>{% if not loop.last %}<span class="muted">→</span>{% endif %}{% endfor %}</div>
-  <p class="small muted">Applied counts only applications with recorded confirmation evidence.</p>
-</section>
+{% elif not stats.next_item %}<div class="notice">Nothing needs your attention right now.</div>{% endif %}
 
 {% if stats.last_failure %}<div class="notice warn">Last failed task: {{ stats.last_failure.task_name }} at {{ stats.last_failure.started_at|dt }} — {{ stats.last_failure.message }} <a href="/system">System →</a></div>{% endif %}
+
+<h2 class="section-title">Needs attention</h2>
+<div class="stats">
+  <div class="stat{% if stats.review_count %} attention{% endif %}"><a href="/review"><div class="v">{{ stats.review_count }}</div><div class="l">items to review</div></a></div>
+  <div class="stat{% if stats.awaiting_approval %} attention{% endif %}"><a href="/review?category=submission_approval"><div class="v">{{ stats.awaiting_approval }}</div><div class="l">applications awaiting your approval</div></a></div>
+  <div class="stat{% if stats.deadlines_count %} attention{% endif %}"><a href="#agenda"><div class="v">{{ stats.deadlines_count }}</div><div class="l">deadlines in the next 14 days</div></a></div>
+  <div class="stat{% if stats.followups_due %} attention{% endif %}"><a href="/drafts"><div class="v">{{ stats.followups_due }}</div><div class="l">follow-ups due</div></a></div>
+  <div class="stat"><a href="/interviews"><div class="v">{{ stats.upcoming|length }}</div><div class="l">upcoming interviews</div></a></div>
+  <div class="stat{% if stats.source_failures %} attention{% endif %}"><a href="/sources"><div class="v">{{ stats.source_failures|length }}</div><div class="l">failing sources · last discovery {{ stats.last_discovery|dt if stats.last_discovery else "never" }}</div></a></div>
+</div>
+
+<h2 class="section-title">Search and applications</h2>
+<div class="stats">
+  <div class="stat"><a href="/jobs"><div class="v">{{ stats.jobs_active }}</div><div class="l">active jobs · {{ stats.jobs_new_7d }} new this week</div></a></div>
+  <div class="stat"><a href="/jobs?min_score={{ stats.threshold }}"><div class="v">{{ stats.jobs_relevant }}</div><div class="l">relevant (score ≥ {{ stats.threshold }})</div></a></div>
+  <div class="stat"><a href="/jobs?user_status=shortlisted"><div class="v">{{ stats.shortlisted }}</div><div class="l">saved (shortlisted)</div></a></div>
+  <div class="stat"><a href="/applications"><div class="v">{{ stats.in_progress }}</div><div class="l">applications in preparation</div></a></div>
+  <div class="stat"><a href="/applications"><div class="v">{{ stats.submitted }}</div><div class="l">submitted (with evidence)</div></a></div>
+</div>
+
+<section class="card" id="regions">
+  <h2>Jobs by region</h2>
+  <div class="region-grid">
+  {% for r in by_region %}
+    <div class="region-col">
+      <h3><a href="/jobs?region={{ r.key }}"><span class="badge r-{{ r.key }}">{{ r.label }}</span></a>
+        <span class="small muted">{{ r.count }} active · {{ r.new }} new this week</span></h3>
+      {% if r.top %}<ol class="small">
+        {% for j in r.top %}<li>{{ score(j.relevance_score) }} <a href="/jobs/{{ j.id }}">{{ j.title }}</a> <span class="muted">· {{ j.company_name or "?" }}</span></li>{% endfor %}
+      </ol>{% else %}<p class="small muted">None yet. <a href="/sources">Check your sources</a>.</p>{% endif %}
+    </div>
+  {% endfor %}
+  </div>
+</section>
 
 <div class="grid-2">
 <section class="card">
   <h2>Top new matches</h2>
   {% if stats.top_jobs %}
-  <table class="table compact">
-    {% for j in stats.top_jobs %}<tr><td>{{ score(j.relevance_score) }}</td><td><a href="/jobs/{{ j.id }}">{{ j.title }}</a><div class="muted small">{{ j.company_name or "?" }} · {{ j.location or "" }}</div></td><td>{{ badge(j.eligibility) }}</td></tr>{% endfor %}
-  </table>
+  <ul class="row-list">
+    {% for j in stats.top_jobs %}<li><span>{{ score(j.relevance_score) }} <a href="/jobs/{{ j.id }}">{{ j.title }}</a> <span class="meta">· {{ j.company_name or "?" }}{% if j.location %} · {{ j.location }}{% endif %}</span></span>{{ badge(j.eligibility) }}</li>{% endfor %}
+  </ul>
   {% else %}{{ empty("No new relevant jobs. Run your sources or import jobs.") }}{% endif %}
 </section>
 
-<section class="card" id="deadlines">
-  <h2>Upcoming deadlines</h2>
-  {% for due, j in stats.deadlines %}<div>{{ due|d }} · <a href="/jobs/{{ j.id }}">{{ j.title }}</a> <span class="muted small">{{ j.company_name or "?" }}</span></div>
-  {% else %}{{ empty("No stated deadlines for shortlisted jobs or applications in progress. Deadlines are only taken from the posting, never guessed.") }}{% endfor %}
+<section class="card" id="agenda">
+  <h2>Agenda</h2>
+  <h3>Upcoming interviews</h3>
+  <ul class="row-list">
+  {% for i in stats.upcoming %}<li><span><a href="/interviews/{{ i.id }}">{{ i.application.job.title }}</a> <span class="meta">· {{ i.application.job.company_name or "?" }}</span></span>
+    <span class="meta">{{ i.scheduled_at|dt if i.scheduled_at else "date TBD" }} · {{ i.stage|replace("_"," ") }}</span></li>
+  {% else %}<li class="muted small">None scheduled.</li>{% endfor %}
+  </ul>
+  <h3>Deadlines (next 14 days)</h3>
+  <ul class="row-list">
+  {% for due, j in stats.deadlines %}<li><span><a href="/jobs/{{ j.id }}">{{ j.title }}</a> <span class="meta">· {{ j.company_name or "?" }}</span></span><span class="meta">{{ due|d }}</span></li>
+  {% else %}<li class="muted small">No stated deadlines. Deadlines come only from the posting, never guessed.</li>{% endfor %}
+  </ul>
   {% for src, run in stats.source_failures %}<div class="notice warn">Source <a href="/sources/{{ src.id }}">{{ src.name }}</a>: last run {{ run.status }} ({{ run.started_at|dt }}). Existing jobs were not changed.</div>{% endfor %}
-  <h2>Upcoming interviews</h2>
-  {% for i in stats.upcoming %}<div><a href="/interviews/{{ i.id }}">{{ i.application.job.title }}</a> · {{ i.application.job.company_name or "?" }}
-    <span class="muted small">{{ i.scheduled_at|dt if i.scheduled_at else "date TBD" }} · {{ i.stage|replace("_"," ") }}</span></div>
-  {% else %}{{ empty("None scheduled.") }}{% endfor %}
-  <h3>Applications by status</h3>
-  {% for k, v in stats.applications.items() %}<span class="tag">{{ k|replace("_"," ") }} · {{ v }}</span>{% else %}<span class="muted">none yet</span>{% endfor %}
 </section>
 </div>
+
+<div class="grid-2">
+<section class="card">
+  <h2>Outreach</h2>
+  <ul class="row-list">
+    <li><a href="/drafts?status=draft">Drafts to review</a><b>{{ stats.outreach.to_review }}</b></li>
+    <li><a href="/drafts?status=approved">Approved, not sent</a><b>{{ stats.outreach.approved_not_sent }}</b></li>
+    <li><span>…of which in your Gmail Drafts <span class="meta">(confirmed by Gmail)</span></span><b>{{ stats.outreach.in_gmail_drafts }}</b></li>
+    <li><a href="/drafts">Follow-ups due</a><b>{{ stats.followups_due }}</b></li>
+    {% if stats.outreach.gmail_attention %}<li><a href="/drafts?status=approved">Gmail state needs checking</a>{{ badge(stats.outreach.gmail_attention|string, "b-warn") }}</li>{% endif %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Pipeline</h2>
+  <div class="funnel">{% for label, n, href in stats.funnel %}<a href="{{ href }}"><b>{{ n }}</b><span>{{ label }}</span></a>{% endfor %}</div>
+  <p class="small muted" style="margin-top:var(--s3)">Applied counts only applications with recorded confirmation evidence.</p>
+  <h3>Applications by status</h3>
+  {% for k, v in stats.applications.items() %}<span class="tag">{{ k|replace("_"," ") }} · {{ v }}</span>{% else %}<span class="muted small">none yet</span>{% endfor %}
+</section>
+</div>
+
+<section class="card" id="system-status">
+  <h2>System</h2>
+  {% set sy = system %}
+  <ul class="row-list">
+    <li><span>Scheduler <span class="meta">({{ sy.scheduler_mode }}; {{ sy.enabled_tasks }} task(s) enabled)</span></span>
+      <span>{% if sy.next_run %}next run {{ sy.next_run|dt }} UTC{% else %}{{ badge("no tasks enabled", "b-warn") }}{% endif %}</span></li>
+    <li><span>Last successful job collection</span><span>{{ sy.last_collect|dt if sy.last_collect else "never" }}</span></li>
+    <li><a href="/telegram">Telegram</a><span>{% if sy.telegram.ready %}{{ badge("configured", "b-ok") }}{% if sy.telegram_last_sent %} <span class="meta">last delivered {{ sy.telegram_last_sent|dt }}</span>{% endif %}{% elif sy.telegram.enabled %}{{ badge("setup incomplete", "b-warn") }}{% else %}{{ badge("off", "b-none") }}{% endif %}
+      {% if sy.telegram_failed %}{{ badge(sy.telegram_failed ~ " failed", "b-error") }}{% endif %}</span></li>
+    <li><a href="/gmail">Gmail</a><span>{% if sy.gmail.ready %}{{ badge("ready", "b-ok") }}{% else %}{{ badge("not ready", "b-warn") }}{% endif %}</span></li>
+    <li><a href="/system">Errors in the last 7 days</a><span>{% if sy.errors %}{{ badge(sy.errors|length ~ " failed task(s)", "b-error") }}{% else %}{{ badge("none", "b-ok") }}{% endif %}</span></li>
+  </ul>
+  {% for e in sy.errors %}<div class="notice warn small">{{ e.task_name }} at {{ e.started_at|dt }}: {{ (e.message or "")[:160] }}</div>{% endfor %}
+</section>
 
 <section class="card">
   <h2>Recent activity</h2>
   {% if stats.recent_activity %}
   <ul class="activity">
     {% for a in stats.recent_activity %}
-      <li><span class="muted">{{ a.ts|dt }}</span> {{ a.action }}{% if a.entity_type %} · {{ a.entity_type }}{% if a.entity_id %} #{{ a.entity_id }}{% endif %}{% endif %}{% if a.actor != "user" %} <span class="muted small">({{ a.actor }})</span>{% endif %}</li>
+      <li><span class="muted">{{ a.ts|dt }}</span> · {{ a.action }}{% if a.entity_type %} · {{ a.entity_type }}{% if a.entity_id %} #{{ a.entity_id }}{% endif %}{% endif %}{% if a.actor != "user" %} <span class="muted small">({{ a.actor }})</span>{% endif %}</li>
     {% endfor %}
   </ul>
   {% else %}{{ empty("Nothing yet.") }}{% endif %}

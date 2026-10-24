@@ -187,7 +187,9 @@ def test_assist_fills_known_fields_and_never_submits(chrome_page, tmp_path):
     assert chrome_page.evaluate("document.body.dataset.submitted") is None, "must never submit"
     assert res.status == "paused"
     assert any("Why do you want" in u for u in res.unknown)
-    assert any("privacy" in s.lower() for s in res.sensitive) and any("Gender" in s for s in res.sensitive)
+    assert any("privacy" in s.lower() for s in res.sensitive), "required consent: yours to decide"
+    # an optional demographic question is never answered for you, and is reported as optional (not blocking)
+    assert any("Gender" in e["field"] for e in res.report["optional_blank"]) and not any("Gender" in s for s in res.sensitive)
 
 
 def test_assist_pauses_on_captcha(chrome_page):

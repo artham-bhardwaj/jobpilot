@@ -58,6 +58,7 @@ def stats(session: Session) -> dict:
         ("Review search preferences", _prefs_saved(session), "/settings"),
     ]
     out["resume_slots"] = session.scalar(select(func.count(Resume.id))) or 0
+    out["outreach"] = _outreach(session)
     out.update(_attention(session, now))
     return out
 
@@ -88,6 +89,43 @@ def _attention(session: Session, now) -> dict:
     top = min(items, key=lambda i: (-i["priority"], -(i["score"] or 0)), default=None)
     return {"awaiting_approval": awaiting, "deadlines": deadlines[:8], "deadlines_count": len(deadlines),
             "source_failures": failing, "last_discovery": last_ok, "next_item": top, "review_count": len(items)}
+
+
+def system_status(session: Session, settings=None) -> dict:
+    """Health at a glance. Integration status comes from configuration, never from assumed success."""
+    from jobpilot.config import get_settings
+    from jobpilot.integrations import gmail, telegram
+    from jobpilot.models import Notification
+    from jobpilot.services import scheduler
+
+    settings = settings or get_settings()
+    nxt = [v for v in scheduler.next_runs(session).values() if v is not None]
+    since = utcnow() - timedelta(days=7)
+    last_sent = session.scalar(select(func.max(Notification.sent_at)))
+    return {
+        "scheduler_mode": "running in the server" if settings.scheduler_enabled else "not running in the server",
+        "enabled_tasks": sum(1 for v in scheduler.next_runs(session).values() if v is not None),
+        "next_run": min(nxt) if nxt else None,
+        "last_collect": session.scalar(select(func.max(TaskRun.finished_at)).where(TaskRun.task_name == "collect_jobs",
+                                                                                    TaskRun.status == "success")),
+        "errors": list(session.scalars(select(TaskRun).where(TaskRun.status == "failed", TaskRun.started_at >= since)
+                                       .order_by(TaskRun.id.desc()).limit(3))),
+        "telegram": telegram.config_status(settings), "telegram_last_sent": last_sent,
+        "telegram_failed": session.scalar(select(func.count(Notification.id)).where(Notification.status == "failed")) or 0,
+        "gmail": gmail.readiness(settings),
+    }
+
+
+def _outreach(session: Session) -> dict:
+    """Outreach drafts by state. Gmail figures come only from what Gmail confirmed (stored Gmail state)."""
+    from jobpilot.models import EmailDraft
+
+    rows = list(session.scalars(select(EmailDraft).where(EmailDraft.status.in_(("draft", "approved")))))
+    return {"to_review": sum(1 for d in rows if d.status == "draft"),
+            "approved_not_sent": sum(1 for d in rows if d.status == "approved"),
+            "in_gmail_drafts": sum(1 for d in rows if d.status == "approved" and d.gmail_status == "created"),
+            "gmail_attention": sum(1 for d in rows if d.gmail_status in ("failed", "pending", "send_unknown", "outdated",
+                                                                        "missing"))}
 
 
 def _prefs_saved(session: Session) -> bool:

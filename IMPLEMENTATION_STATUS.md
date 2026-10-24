@@ -8,6 +8,50 @@ Commits: `19f3d19` baseline, `04b70f3` Milestone 8, `cb9b23f` Milestone 9, `83f3
 Legend: **Verified** = exercised by automated tests and/or the live local checks below.
 **Offline-verified** = tested only against recorded/synthetic responses; the live service has not been contacted.
 
+## Milestone 17 — Docker deployment option (2026-10-17)
+
+- `Dockerfile` (pinned python:3.12.14-slim-trixie by digest, locked runtime deps, non-root uid 10001, health check on
+  `/health`), `docker/entrypoint.sh` (init on a fresh volume, then exec one `jobpilot serve`), `compose.yaml`
+  (loopback-only port, read-only root, tmpfs /tmp, init, unless-stopped, one /data volume), allow-list
+  `.dockerignore`, `.env.docker.example`, `docs/DOCKER.md`, `tests/test_docker_config.py`.
+- Verified with isolated compose projects (not the live data): build, compose config, health, persistence across
+  recreation, crash restart, clean shutdown, image secret scan, migration rehearsal with synthetic data.
+- App change: one INFO log line when shutdown completes.
+- Not supported: domain-name reverse proxy (Host/Origin checks accept localhost only); Chrome/Playwright not in image.
+
+## Milestone 16 — scheduler observability and unattended-run hardening (2026-10-17)
+
+- Scheduler records its runner (pid, start, poll interval) and every pass (including empty ones, logged at DEBUG)
+  in `integration_state`; `scheduler status`, System page and `/health` show last/next pass and per-task state.
+- Scheduled collection with every source failed/unavailable is now a failed task (bounded backoff), not a success.
+- Backups: snapshot integrity check, verified before being kept (atomic rename); retention counts only valid backups.
+
+## Milestone 15 — real job discovery for target companies (2026-10-17)
+
+- New `sitemap` source kind (career-site sitemap + JobPosting pages; robots.txt, same-host, page cap, no expiry).
+- Configured Visa, Mastercard, Adobe (Workday). Atlassian (iCIMS), JPMorgan (Oracle HCM), Google, Microsoft, Amazon:
+  no supported source.
+- Live: dry run 17 + 6 requests; real run 21 requests, 15 jobs saved; repeat runs: 0 new, 0 duplicates.
+- Fixed: cross-source duplicates (same company + requisition id), experience figures stated only for PhD/advanced
+  degree holders, UTF-8 pages without a charset decoded as Latin-1, repeated country in JSON-LD locations.
+
+## Milestone 14 — Telegram notifications, verified-recipient sending (2026-10-17)
+
+- Added: Telegram Bot API client, notification pipeline (baseline, per-event dedupe, grouping, daily summary,
+  retries), read-only bot commands by long polling (one poller via file lock, persisted offset, processed-update
+  log), `notify` scheduler task, `/telegram` page, overview System card, health check, `jobpilot telegram …` CLI,
+  token-redacting log filter, migration 0010. Docs: `docs/TELEGRAM.md`.
+- Sending via Gmail now also requires the recipient to be a contact record with that exact address, verified by you.
+- Verified live: token valid (`getMe`). Not yet: chat id, test message, commands (needs you to press Start).
+- Job discovery: only the manual source is configured, so live collection made no requests (dry run: 0 sources).
+- Tests: see the final report of this milestone; full suite run after the changes.
+
+## Milestone 13 — Gmail draft-first workflow and light redesign (2026-10-17)
+
+- Root cause of "no Gmail draft": approval is local by design; the Gmail actions were hidden because the server
+  process didn't have `JOBPILOT_GMAIL_ENABLED` (set only in a shell). Now `.env`, and the page explains it.
+- Gmail drafts verified live (draft read back from Gmail with the resume attached; nothing sent).
+
 ## Milestone 12 — personal information hub and resume import (2026-10-17)
 
 **Already existed:** profile tables with `confirmed/unverified/learning/outdated` status and a free-text `source`;

@@ -14,6 +14,29 @@ LOG_FILE_NAME = "jobpilot.log"
 _RESERVED = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message", "asctime"}
 
 
+class RedactSecrets(logging.Filter):
+    """Scrub anything shaped like a Telegram bot token from every record (message, arguments, traceback)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        from jobpilot.integrations.telegram import redact
+
+        try:
+            msg = record.getMessage()
+        except Exception:  # malformed args: leave the record to the formatter
+            return True
+        clean = redact(msg)
+        if clean != msg or record.args:
+            record.msg, record.args = clean, None
+        if record.exc_info and record.exc_info[1] is not None:
+            text = logging.Formatter().formatException(record.exc_info)
+            if redact(text) != text:
+                record.exc_text, record.exc_info = redact(text), None
+        for key, value in list(record.__dict__.items()):
+            if key not in _RESERVED and isinstance(value, str) and redact(value) != value:
+                setattr(record, key, redact(value))
+        return True
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -31,6 +54,8 @@ class JsonFormatter(logging.Formatter):
                     payload[key] = repr(value)
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
+        elif record.exc_text:
+            payload["exc"] = record.exc_text
         return json.dumps(payload, ensure_ascii=False)
 
 
@@ -65,6 +90,8 @@ def configure_logging(settings: Settings, console_level: str | None = None) -> P
     sh._jobpilot_console = True  # type: ignore[attr-defined]
     sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
     sh._jobpilot = True  # type: ignore[attr-defined]
+    for h in (fh, sh):
+        h.addFilter(RedactSecrets())
     root.addHandler(fh)
     root.addHandler(sh)
     for noisy in ("urllib3", "httpx", "httpcore", "multipart", "alembic"):

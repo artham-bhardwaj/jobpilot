@@ -16,6 +16,7 @@ body access — suggest interviews from invitation emails.</p>
     <tr><th>Requested scopes</th><td class="small">{% for s in st.requested_scopes %}<code>{{ s.rsplit("/",1)[-1] }}</code> {% endfor %}</td></tr>
     {% if st.granted_scopes %}<tr><th>Granted scopes</th><td class="small">{% for s in st.granted_scopes %}<code>{{ s.rsplit("/",1)[-1] }}</code> {% endfor %}</td></tr>{% endif %}
   </table>
+  {% if not ready.ready %}<div class="notice warn" role="status">Not usable by this server: {{ ready.problems|join("; ") }}.</div>{% endif %}
   {% if not st.enabled or not st.authorized %}
   <div class="notice">Setup (one time, manual): follow <code>docs/GMAIL_SETUP.md</code> — create a Desktop OAuth client in your own
   Google Cloud project, save the JSON to the path above, set <code>JOBPILOT_GMAIL_ENABLED=true</code>, then run

@@ -12,6 +12,16 @@ are refused.</p>
 limits, malformed responses and empty or collapsed listings never expire jobs. <b>Dry run</b> fetches and shows what
 would change without saving anything (it still contacts the site).</div>
 
+{% if regional.add or regional.extend %}
+<section class="card">
+  <h2>India, remote and Dubai coverage</h2>
+  <p class="small">Adds {{ regional.add|length }} source(s){% if regional.add %} ({{ regional.add|join(", ") }}){% endif %}
+    {% if regional.extend %} and keeps remote (open to India/UAE) and Dubai roles on {{ regional.extend|length }} existing board(s){% endif %}.
+    Your existing sources are not otherwise changed.</p>
+  <form method="post" action="/sources/regional" class="inline"><button class="primary">Add regional sources</button></form>
+</section>
+{% endif %}
+
 <section class="card">
   <div class="actions" style="margin-top:0">
     <form method="post" action="/sources/run" class="inline"><button class="primary">Run all enabled sources</button></form>

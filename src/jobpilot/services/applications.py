@@ -92,7 +92,8 @@ def find_duplicates(session: Session, job: Job, exclude_id: int | None = None) -
     return out
 
 
-def create(session: Session, job: Job, status: str = "preparing", override_note: str | None = None) -> Application:
+def create(session: Session, job: Job, status: str = "preparing", override_note: str | None = None,
+           actor: str = "user", note: str = "created") -> Application:
     if status not in ("discovered", "shortlisted", "preparing"):
         raise ApplicationError("New applications start as discovered, shortlisted or preparing")
     dups = find_duplicates(session, job)
@@ -105,13 +106,13 @@ def create(session: Session, job: Job, status: str = "preparing", override_note:
                       duplicate_override_note=override_note if dups else None, checklist={})
     session.add(app)
     session.flush()
-    session.add(ApplicationEvent(application_id=app.id, from_status=None, to_status=status, note="created"))
+    session.add(ApplicationEvent(application_id=app.id, from_status=None, to_status=status, note=note, actor=actor))
     if job.user_status == "new":
         job.user_status = "shortlisted"
     if status == "preparing":
         _prepare(session, app)
         prepare_snapshot(session, app)
-    audit.record(session, "application.created", "application", app.id, job_id=job.id, status=status)
+    audit.record(session, "application.created", "application", app.id, actor=actor, job_id=job.id, status=status)
     return app
 
 
@@ -203,7 +204,7 @@ def prepare_snapshot(session: Session, app: Application) -> dict[str, Any]:
                   "skills_missing": sk.get("missing_mandatory") or [], "experience": experience},
         "missing": {"profile": m.get("missing_profile_info") or [], "job": m.get("missing_job_info") or [],
                     "profile_conflicts": hub_svc.open_conflicts(session),
-                    "questions_unanswered": sum(1 for x in qs if x["q"].status != "approved")},
+                    "questions_unanswered": sum(1 for x in qs if x["q"].status == "unanswered")},
         "answers": {"total": len(qs), "approved": sum(1 for x in qs if x["q"].status == "approved"),
                     "sensitive": sum(1 for x in qs if x["q"].sensitive),
                     "bank_suggestions": sum(1 for x in qs if x["suggestion"])},
@@ -390,6 +391,25 @@ def record_submission(session: Session, app: Application, method: str, note: str
         app.job.user_status = "shortlisted"
     audit.record(session, "application.submitted", "application", app.id, method=method,
                  resume_version_id=app.resume_version_id)
+    return app
+
+
+def record_confirmation_email(session: Session, app: Application, *, when, evidence: str) -> Application:
+    """The employer's confirmation email arrived for an application whose form JobPilot opened: that email is the
+    confirmation evidence, so the submission is recorded (actor ``system``), its exceptions are closed, and the
+    usual tracking and follow-ups start. Only called by the Gmail confirmation detector."""
+    if app.applied_at is not None or app.status not in ("preparing", "ready_for_review"):
+        raise ApplicationError("Only an open, unrecorded application can be confirmed by email")
+    session.add(ApplicationEvidence(application_id=app.id, kind="confirmation_email", text=evidence[:5000]))
+    app.applied_at = when or utcnow()
+    app.confirmation_method = "confirmation_email"
+    app.confirmation_note = "confirmed by the employer's email (detected automatically; headers only)"
+    _event(session, app, "applied", "confirmation email received", actor="system")
+    if app.job.user_status != "shortlisted":
+        app.job.user_status = "shortlisted"
+    review.resolve_items(session, "submission_approval", "application", app.id, "confirmed by email")
+    audit.record(session, "application.submitted", "application", app.id, actor="system", method="confirmation_email",
+                 resume_version_id=app.resume_version_id, automated=True)
     return app
 
 

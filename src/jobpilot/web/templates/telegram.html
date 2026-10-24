@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty %}
+{% block title %}Telegram{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/settings">← Settings</a></p>
+<header class="page-head"><div><h1>Telegram notifications</h1>
+<p class="lede">Notifications go only to your configured chat, and the bot answers read-only commands from that chat only.
+It never sends emails or applications, and never approves anything.</p></div></header>
+
+<section class="card">
+  <h2>Configuration</h2>
+  <table class="kv">
+    <tr><th scope="row">Enabled</th><td>{{ badge("yes" if st.enabled else "no", "b-ok" if st.enabled else "b-none") }} <span class="muted small">JOBPILOT_TELEGRAM_ENABLED</span></td></tr>
+    <tr><th scope="row">Bot token</th><td>{{ badge("set" if st.token_set else "missing", "b-ok" if st.token_set else "b-warn") }} <span class="muted small">JOBPILOT_TELEGRAM_BOT_TOKEN — never shown</span></td></tr>
+    <tr><th scope="row">Your chat id</th><td>{{ badge("set" if st.chat_id_set else "missing", "b-ok" if st.chat_id_set else "b-warn") }} <span class="muted small">JOBPILOT_TELEGRAM_CHAT_ID</span></td></tr>
+    <tr><th scope="row">Commands</th><td>{% if poller %}{{ badge("answering", "b-ok") }} this server is polling for commands{% elif st.ready and st.commands_enabled %}{{ badge("not running", "b-warn") }} restart <code>jobpilot serve</code> to start answering commands{% else %}{{ badge("off", "b-none") }}{% endif %}</td></tr>
+  </table>
+  {% if not st.ready %}
+  <div class="notice warn" role="status">Not ready: {{ st.problems|join("; ") }}.</div>
+  <div class="notice">Setup (in a terminal): <code>jobpilot telegram check</code> → open the bot in Telegram and press <b>Start</b> →
+    <code>jobpilot telegram find-chat</code> → <code>jobpilot telegram set-chat &lt;your chat id&gt;</code> → restart <code>jobpilot serve</code>.
+    See <code>docs/TELEGRAM.md</code>.</div>
+  {% else %}
+  <div class="actions">
+    <form method="post" action="/telegram/test" class="inline" data-confirm="Send one test message to your Telegram chat?"><button>Send test message</button></form>
+    <form method="post" action="/telegram/notify" class="inline" data-confirm="Check for new events and send any pending notifications to your Telegram chat now?"><button class="primary">Check and notify now</button></form>
+  </div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Delivery</h2>
+  <p class="small muted">{% for k, v in counts|dictsort %}{{ k }}: {{ v }}{% if not loop.last %} · {% endif %}{% else %}No notifications yet.{% endfor %}
+  {% if baseline %} · started {{ baseline.at }} ({{ baseline.events }} earlier event(s) recorded as history, not announced){% endif %}</p>
+  {% if recent %}<div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Created</th><th>Kind</th><th>Status</th><th>Attempts</th><th>Message</th></tr></thead>
+    <tbody>{% for n in recent %}<tr><td class="nowrap">{{ n.created_at|dt }}</td><td>{{ n.kind|replace("_", " ") }}</td>
+      <td>{{ badge(n.status) }}{% if n.sent_at %}<div class="small muted">delivered {{ n.sent_at|dt }}</div>{% endif %}{% if n.last_error %}<div class="small err-text">{{ n.last_error }}</div>{% endif %}</td>
+      <td>{{ n.attempts }}</td><td class="small wrap">{{ n.text[:220] }}{% if n.text|length > 220 %}…{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}{{ empty("Nothing has been queued yet.") }}{% endif %}
+  <p class="small muted">Delivered = Telegram returned a message id. Preferences (which events, thresholds, daily-summary hour) are under
+    <a href="/settings#notifications">Settings → notifications</a>; the schedule is the <code>notify</code> task under <a href="/settings#scheduler">scheduler</a>.</p>
+</section>
+{% endblock %}

@@ -30,8 +30,8 @@ def cmd_scheduler(args) -> int:
         print(json.dumps(scheduler.run_due(settings, factory, trigger="scheduled"), indent=2))
     elif args.action == "status":
         with factory() as s:
-            print(json.dumps({"due": scheduler.due_tasks(s),
-                              "last_success": {n: str(scheduler.last_success(s, n)) for n in scheduler.TASKS}}, indent=2))
+            rep = scheduler.status_report(s, settings)
+            print(json.dumps(_status_json(rep, s, scheduler), indent=2))
     elif args.action == "run":
         from jobpilot.services.tasks import run_task
 
@@ -43,28 +43,135 @@ def cmd_scheduler(args) -> int:
     return 0
 
 
+def _when(dt) -> str | None:
+    """'2026-10-17 17:56:51 UTC (23:26 local)': stored times are naive UTC."""
+    if dt is None:
+        return None
+    from datetime import UTC, datetime
+
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt)
+    local = dt.replace(tzinfo=UTC).astimezone()
+    return f"{dt:%Y-%m-%d %H:%M:%S} UTC ({local:%a %H:%M %Z})"
+
+
+def _status_json(rep: dict, s, scheduler) -> dict:
+    lp = rep["last_pass"] or {}
+    return {
+        "scheduler": rep["scheduler"],
+        "last_pass": None if not lp else {"finished_at": _when(lp.get("finished_at")), "runner": lp.get("runner"),
+                                          "ran": lp.get("ran") or "nothing due (empty pass)"},
+        "next_pass_expected": _when(rep["next_pass"]) or "unknown (no running scheduler)",
+        "pass_overdue": rep["pass_overdue"],
+        "note": rep["note"],
+        "due": [n for n, t in rep["tasks"].items() if t["due"]],
+        "tasks": {n: {"enabled": t["enabled"], "every_hours": t["every_hours"],
+                      "last_run": None if not t["last_run"] else
+                      f"{t['last_run']['status']} ({t['last_run']['trigger']}) at {_when(t['last_run']['started_at'])}",
+                      "last_success": _when(t["last_success"]), "due_now": t["due"],
+                      "next_due": _when(t["next_due"]) if t["enabled"] else "disabled",
+                      "expected_run": _when(t["expected_run"]),
+                      **({"retrying_after_failure_at": _when(t["retry_after_failure_at"])}
+                         if t["retry_after_failure_at"] else {})}
+                  for n, t in rep["tasks"].items()},
+        "last_success": {n: str(scheduler.last_success(s, n)) for n in scheduler.TASKS},
+    }
+
+
 def cmd_gmail(args) -> int:
     from jobpilot.cli import _ctx
+    from jobpilot.db import session_scope
     from jobpilot.integrations import gmail
+    from jobpilot.models import EmailDraft
 
     settings, _, factory = _ctx()
+
+    def out(data) -> None:
+        print(json.dumps(data, indent=2, default=str))
+
+    def load(s, draft_id):
+        d = s.get(EmailDraft, draft_id) if draft_id else None
+        if d is None:
+            raise gmail.GmailError("Give an existing local draft id with --draft ID")
+        return d
+
+    def state(d) -> dict:
+        return {"draft": d.id, "local_status": d.status, "approved_at": d.approved_at, "to": d.to_address,
+                "subject": d.subject, "gmail_status": d.gmail_status, "gmail_draft_id": d.gmail_draft_id,
+                "gmail_thread_id": d.gmail_thread_id, "gmail_message_id": d.gmail_message_id,
+                "gmail_attachment": d.gmail_attachment, "gmail_error": d.gmail_error, "sent_at": d.sent_at,
+                "sent_via": d.sent_via}
+
     try:
         if args.action == "auth":
             tok = gmail.authorize(settings, open_browser=not args.no_browser)
             print(f"Authorised as {tok.get('email')}. Token stored at {settings.gmail_token_file} (mode 600).")
         elif args.action == "status":
-            print(json.dumps(gmail.status(settings), indent=2))
+            out(gmail.status(settings))
         elif args.action == "revoke":
             gmail.revoke(settings)
             print("Token revoked and deleted.")
+        elif args.action == "check":  # read-only: proves the token works against the real API
+            client = gmail.GmailClient(settings)
+            out({"ok": True, "email": client.profile_email(), **gmail.readiness(settings)})
         elif args.action == "sync":
+            with session_scope(factory) as s:
+                res = gmail.sync_replies(s, settings, gmail.GmailClient(settings))
+            out(res)
+            return 1 if res["errors"] else 0
+        elif args.action == "test-draft":
+            if not args.to:
+                raise gmail.GmailError("--to is required (use an address you control or a reserved one such as "
+                                       "jobpilot-test@example.com; nothing is sent either way)")
+            with session_scope(factory) as s:
+                d = _make_test_draft(s, args.to, args.resume_version)
+                try:
+                    res = gmail.create_gmail_draft(s, settings, d, gmail.GmailClient(settings))
+                except gmail.GmailError as exc:
+                    out(state(d))
+                    raise exc
+                out({"created": not res["reused"], **state(d)})
+        elif args.action == "create-draft":
+            with session_scope(factory) as s:
+                d = load(s, args.draft)
+                res = gmail.create_gmail_draft(s, settings, d, gmail.GmailClient(settings))
+                out({"created": not res["reused"], **state(d)})
+        elif args.action == "draft-status":
+            with session_scope(factory) as s:
+                d = load(s, args.draft)
+                res = gmail.reconcile(s, settings, d, gmail.GmailClient(settings)) if args.refresh else None
+                out({**state(d), **({"gmail_check": res} if res else {})})
+        elif args.action == "inspect":
             with factory() as s:
-                print(json.dumps(gmail.sync_replies(s, settings, gmail.GmailClient(settings)), indent=2))
-                s.commit()
+                d = load(s, args.draft)
+                if not d.gmail_draft_id:
+                    raise gmail.GmailError(f"Draft #{d.id} has no Gmail draft id (gmail_status={d.gmail_status})")
+                out(gmail.inspect_gmail_draft(gmail.GmailClient(settings), d.gmail_draft_id))
     except gmail.GmailError as exc:
         print(f"Gmail: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _make_test_draft(s, to: str, resume_version_id: int | None):
+    """A clearly labelled local test draft (kind gmail_test), approved so it can be put into Gmail Drafts."""
+    from jobpilot.models import EmailDraft, ResumeVersion, utcnow
+    from jobpilot.services import audit
+
+    rv = s.get(ResumeVersion, resume_version_id) if resume_version_id else None
+    if resume_version_id and rv is None:
+        raise ValueError(f"Resume version #{resume_version_id} not found")
+    stamp = utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    body = ("This is a JobPilot connection test created from the command line. It is a draft only and must not be "
+            "sent.\n\n" + ("A resume file is attached to check attachments.\n" if rv else "No attachment.\n") +
+            "Delete this draft from Gmail after checking it.")
+    d = EmailDraft(kind="gmail_test", to_address=to.strip().lower(), subject=f"[JobPilot test] Gmail draft check {stamp} — do not send",
+                   body=body, status="approved", approved_at=utcnow(), missing_fields=[],
+                   resume_version_id=rv.id if rv else None)
+    s.add(d)
+    s.flush()
+    audit.record(s, "draft.test_created", "email_draft", d.id)
+    return d
 
 
 def cmd_export(args) -> int:
@@ -115,8 +222,15 @@ def register(sub) -> None:
     s.set_defaults(func=cmd_scheduler)
 
     s = sub.add_parser("gmail", help="Optional Gmail integration")
-    s.add_argument("action", choices=["auth", "status", "revoke", "sync"])
+    s.add_argument("action", choices=["auth", "status", "check", "revoke", "sync", "test-draft", "create-draft",
+                                      "draft-status", "inspect"],
+                   help="check: verify the token with Gmail (read-only); test-draft: create a labelled test draft in "
+                        "Gmail Drafts (never sends); create-draft/draft-status/inspect: for --draft ID")
     s.add_argument("--no-browser", action="store_true", help="Print the URL instead of opening a browser")
+    s.add_argument("--draft", type=int, help="Local JobPilot draft id")
+    s.add_argument("--to", help="test-draft: recipient shown in the Gmail draft (nothing is sent)")
+    s.add_argument("--resume-version", type=int, help="test-draft: attach this resume version's stored file")
+    s.add_argument("--refresh", action="store_true", help="draft-status: ask Gmail for the current state first")
     s.set_defaults(func=cmd_gmail)
 
     s = sub.add_parser("export", help="Export data (CSV per entity, or everything as JSON)")

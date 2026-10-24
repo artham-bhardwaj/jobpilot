@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from sqlalchemy.orm import Session
 
 from jobpilot.models import AppSetting
@@ -59,8 +59,9 @@ DEFAULTS: dict[str, Any] = {
     # Your additions to the built-in skill dictionary (see Settings). Example:
     # {"extra": {"quarkus": {"category": "framework", "aliases": ["quarkus"]}}, "disabled": ["agile"]}
     "skill_dictionary": {"extra": {}, "disabled": []},
-    # Browser assistance: hosted-form types where autofill may run (others open for manual completion).
-    "browser": {"autofill_sites": ["greenhouse", "lever"]},
+    # Browser assistance (you click Submit yourself): hosted-form types where autofill may run (others open for
+    # manual completion); use_answer_bank: also fill approved, non-sensitive answer-bank answers.
+    "browser": {"autofill_sites": ["greenhouse", "lever"], "use_answer_bank": True},
     # Job collection safety. A job expires only after this many consecutive successful snapshots of its
     # source omit it; an empty snapshot or a mass disappearance is treated as a source anomaly instead.
     "collection": {
@@ -73,8 +74,65 @@ DEFAULTS: dict[str, Any] = {
         "follow_up_days": 7,
         "max_follow_ups": 2,
         "daily_send_limit": 10,
+        # Automatic recruiter outreach (scheduler task "outreach"). Off by default. auto_enabled: queue recruiter
+        # discovery and draft emails for jobs that pass min_score / allowed_eligibility / job_families. auto_send:
+        # also send them through Gmail, only to addresses YOU verified, at most auto_daily_limit per day. Never
+        # follow-ups. JobPilot never applies to jobs for you.
+        "auto_enabled": False,
+        "auto_send": False,
+        "auto_daily_limit": 3,
+        "max_job_age_days": 30,
+        "min_score": 70,
+        "allowed_eligibility": ["eligible", "likely_eligible"],
+        "job_families": ["java_backend", "sde1", "general_swe", "python_backend"],
     },
-    # Optional scheduled tasks (run only while the computer is on). All off by default.
+    # Your application tracker. dream_companies are marked ⭐ and listed first. cooldown_days: per company, the days
+    # to wait between applications — set them yourself (companies rarely publish one; none is assumed).
+    # ask_daily: how many "Did you apply?" questions Telegram asks per day (only if the apply_check notification is
+    # on; the My tracker page asks the same in the dashboard); ask_again_days: after "Not yet".
+    # auto_outcomes: an employer email with an unambiguous subject (rejection, assessment, interview, offer) updates
+    # the application by itself (with an Undo button); anything less clear is asked about.
+    "tracker": {
+        "dream_companies": ["Meta", "Facebook", "Apple", "Amazon", "Netflix", "Google", "Alphabet"],
+        "cooldown_days": {},
+        "ask_daily": 5,
+        "ask_again_days": 3,
+        "auto_outcomes": True,
+    },
+    # Job-specific resumes from the approved Master resume's LaTeX source (services/tailored.py), made only when you
+    # ask for one on a job's page (never automatically). Generation re-orders approved, confirmed content only.
+    # attach: upload a job's validated tailored resume instead of the approved resume it was made from.
+    # page_target: max pages (null = the Master resume's page count).
+    "tailored_resumes": {
+        "enabled": True,
+        "attach": True,
+        "page_target": None,
+        "compile_timeout_s": 90,
+        "min_description_chars": 400,
+        "template": None,
+    },
+    "apollo": {
+        "enabled": False,                  # API mode off until you turn it on (and set JOBPILOT_APOLLO_API_KEY)
+        "max_enrichments_per_day": 0,      # People Enrichment costs ~1 credit per email found; 0 = never
+        "recruiter_titles": ["technical recruiter", "talent acquisition", "recruiter", "university recruiter",
+                             "campus recruiter", "talent partner"],
+        "country": "India",
+    },
+    "notifications": {
+        "enabled": True,
+        # Which events to send. Turned-off kinds are recorded as seen, so they are not sent later either.
+        # Telegram is for alerts; day-to-day work happens in the dashboard, so the chattier kinds are off by default.
+        "kinds": {"high_match": True, "relevant_digest": False, "draft_review": False, "application_status": True,
+                  "reply": True, "follow_up": True, "daily_summary": True, "task_failure": True, "source_failure": True,
+                  "questions": False, "recruiter_found": False, "outreach_gmail": True, "bounce": True,
+                  "recruiter_needed": False, "outreach_sent": True, "apply_check": False, "email_outcome": True},
+        # null = use the matching settings (relevance_threshold / strong_threshold).
+        "relevant_min_score": None,
+        "high_match_min_score": None,
+        "daily_summary_hour": 20,  # local time; sent once per day at the first scan after this hour
+        "max_items_per_message": 10,
+        "max_attempts": 5,
+    },
     "scheduler": {
         "keep_backups": 14,
         "tasks": {
@@ -86,6 +144,9 @@ DEFAULTS: dict[str, Any] = {
             "rematch": {"enabled": False, "every_hours": 24},
             "reminders": {"enabled": False, "every_hours": 12},
             "health_check": {"enabled": False, "every_hours": 24},
+            # Scan for new events and deliver Telegram notifications (only when Telegram is configured).
+            "notify": {"enabled": False, "every_hours": 0.25},
+            "outreach": {"enabled": False, "every_hours": 6},
         },
         # Reminders: how early to warn about a stated deadline, and when a submitted application with no
         # recorded update is worth checking on (never treated as a rejection).
@@ -102,7 +163,10 @@ DEFAULTS: dict[str, Any] = {
         "sde1": {
             "label": "SDE I",
             "title_keywords": ["sde i", "sde 1", "sde-1", "software development engineer i", "software engineer i",
-                               "engineer i", "new grad", "entry level", "junior", "graduate", "associate software"],
+                               "software dev engineer i", "engineer i", "new grad", "entry level", "junior", "graduate",
+                               "associate software"],
+            # A level, not a technology: only the title can say a job is SDE I ("C++, OOP" in a senior posting can't).
+            "title_required": True,
             "skill_keywords": ["data structures", "algorithms", "java", "python", "c++", "oop"],
         },
         "python_backend": {
@@ -120,7 +184,7 @@ DEFAULTS: dict[str, Any] = {
         "general_swe": {
             "label": "General SWE",
             "title_keywords": ["software engineer", "software developer", "swe", "developer", "programmer",
-                               "software development engineer"],
+                               "software development engineer", "software dev engineer", "sde"],
             "skill_keywords": ["data structures", "algorithms", "git", "sql", "rest api"],
         },
     },
@@ -193,7 +257,8 @@ class SkillDictionary(BaseModel):
 
 class BrowserSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    autofill_sites: list[Literal["greenhouse", "lever"]] = Field(default_factory=list)
+    autofill_sites: list[Literal["greenhouse", "lever", "ashby"]] = Field(default_factory=list)
+    use_answer_bank: bool = True
 
 
 class CollectionSettings(BaseModel):
@@ -208,21 +273,88 @@ class OutreachSettings(BaseModel):
     follow_up_days: int = Field(ge=1, le=60)
     max_follow_ups: int = Field(ge=0, le=3)
     daily_send_limit: int = Field(ge=1, le=25)
+    auto_enabled: bool = False
+    auto_send: bool = False
+    auto_daily_limit: int = Field(default=3, ge=0, le=10)
+    max_job_age_days: int = Field(default=30, ge=1, le=120)
+    min_score: float = Field(default=70, ge=0, le=100)
+    allowed_eligibility: list[Literal["eligible", "likely_eligible", "unknown"]] = ["eligible", "likely_eligible"]
+    job_families: list[str] = []
 
 
 class ScheduledTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
-    every_hours: float = Field(default=24, ge=1, le=24 * 30)
+    every_hours: float = Field(default=24, ge=0.08, le=24 * 30)
+
+
+NOTIFY_KINDS = Literal["high_match", "relevant_digest", "draft_review", "application_status", "reply", "follow_up",
+                       "daily_summary", "task_failure", "source_failure", "questions", "recruiter_found",
+                       "outreach_gmail", "bounce", "recruiter_needed", "outreach_sent", "apply_check",
+                       "email_outcome"]
+
+
+class TailoredResumeSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    attach: bool = True
+    page_target: int | None = Field(default=None, ge=1, le=4)
+    compile_timeout_s: int = Field(default=90, ge=10, le=600)
+    min_description_chars: int = Field(default=400, ge=50, le=20_000)
+    template: dict[str, Any] | None = None
+
+
+class TrackerSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dream_companies: list[str] = Field(default_factory=list, max_length=40)
+    cooldown_days: dict[str, int] = {}
+    ask_daily: int = Field(default=5, ge=0, le=20)
+    ask_again_days: int = Field(default=3, ge=1, le=60)
+    auto_outcomes: bool = True
+
+    @model_validator(mode="after")
+    def _cooldowns(self):
+        for name, days in self.cooldown_days.items():
+            if not name.strip() or not 1 <= days <= 730:
+                raise ValueError("cooldown_days: a company name and 1-730 days")
+        return self
+
+
+class ApolloSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    max_enrichments_per_day: int = Field(default=0, ge=0, le=25)
+    recruiter_titles: list[str] = Field(default_factory=list, max_length=12)
+    country: str | None = Field(default=None, max_length=60)
+
+
+class NotificationSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    kinds: dict[NOTIFY_KINDS, bool] = {}
+    relevant_min_score: float | None = Field(default=None, ge=0, le=100)
+    high_match_min_score: float | None = Field(default=None, ge=0, le=100)
+    daily_summary_hour: int = Field(default=20, ge=0, le=23)
+    max_items_per_message: int = Field(default=10, ge=1, le=30)
+    max_attempts: int = Field(default=5, ge=1, le=20)
 
 
 class SchedulerSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     keep_backups: int = Field(default=14, ge=1, le=365)
     tasks: dict[Literal["collect_jobs", "followup_check", "maintenance", "backup", "gmail_sync", "rematch", "reminders",
-                        "health_check"], ScheduledTask] = {}
+                        "health_check", "notify", "outreach"], ScheduledTask] = {}
     deadline_warning_days: int = Field(default=3, ge=1, le=30)
     stale_application_days: int = Field(default=21, ge=3, le=120)
+
+    @model_validator(mode="after")
+    def _intervals(self):
+        # Only the local notification pass may run more often than hourly; anything that contacts job sites,
+        # Gmail or does heavy work keeps at least an hour between runs.
+        for name, t in self.tasks.items():
+            if name != "notify" and t.every_hours < 1:
+                raise ValueError(f"{name}: every_hours must be at least 1")
+        return self
 
 
 class RoleCategory(BaseModel):
@@ -230,6 +362,7 @@ class RoleCategory(BaseModel):
     label: str
     title_keywords: list[str]
     skill_keywords: list[str] = []
+    title_required: bool = False  # True: description skills alone never place a job in this category
 
 
 _VALIDATORS = {
@@ -243,6 +376,10 @@ _VALIDATORS = {
     "browser": BrowserSettings.model_validate,
     "skill_dictionary": SkillDictionary.model_validate,
     "scheduler": SchedulerSettings.model_validate,
+    "notifications": NotificationSettings.model_validate,
+    "apollo": ApolloSettings.model_validate,
+    "tracker": TrackerSettings.model_validate,
+    "tailored_resumes": TailoredResumeSettings.model_validate,
     "role_categories": lambda v: {k: RoleCategory.model_validate(c) for k, c in TypeAdapter(dict).validate_python(v).items()},
 }
 
@@ -260,6 +397,13 @@ def validate(key: str, value: Any) -> None:
         raise ValueError("review_band_low must not exceed relevance_threshold")
 
 
+# Saved settings may still hold values of features that were removed (auto-apply, scheduled resume generation).
+# They are ignored on read, so an old saved value never breaks validation or comes back to life.
+REMOVED = {"tailored_resumes": ("max_per_run",)}
+REMOVED_TASKS = ("autopilot", "tailor_resumes")
+REMOVED_KINDS = ("submission_batch", "autopilot_exceptions", "tailored_resume", "tailored_failed")
+
+
 def get(session: Session, key: str) -> Any:
     row = session.get(AppSetting, key)
     default = copy.deepcopy(DEFAULTS.get(key))
@@ -267,10 +411,14 @@ def get(session: Session, key: str) -> Any:
         return default
     if isinstance(default, dict) and isinstance(row.value, dict):
         merged = default
-        merged.update(row.value)
+        merged.update({k: v for k, v in row.value.items() if k not in REMOVED.get(key, ())})
+        if key == "notifications":
+            merged["kinds"] = {**copy.deepcopy(DEFAULTS[key]["kinds"]),
+                               **{k: v for k, v in (row.value.get("kinds") or {}).items() if k not in REMOVED_KINDS}}
         if key == "scheduler":
             # Tasks added in later versions appear (disabled) even when you saved scheduler settings before.
-            merged["tasks"] = {**copy.deepcopy(DEFAULTS[key]["tasks"]), **(row.value.get("tasks") or {})}
+            merged["tasks"] = {**copy.deepcopy(DEFAULTS[key]["tasks"]),
+                               **{k: v for k, v in (row.value.get("tasks") or {}).items() if k not in REMOVED_TASKS}}
         return merged
     return row.value
 

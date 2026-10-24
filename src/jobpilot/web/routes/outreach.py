@@ -55,7 +55,7 @@ def contact_detail(contact_id: int, request: Request, db: Session = Depends(get_
     candidates = list(db.scalars(select(Job).where(Job.status == "active", Job.id.not_in(linked_ids) if linked_ids else True)
                                  .order_by((Job.company_id == c.company_id).desc(), Job.first_seen_at.desc()).limit(100)))
     return render(request, "contact_detail.html", c=c, drafts=drafts, blocked=blocked, linked=linked,
-                  apps_for=apps_for, link_candidates=candidates,
+                  apps_for=apps_for, link_candidates=candidates, domain_warning=cs.domain_warning(c),
                   templates=_templates(db), kind_labels=ds.KIND_LABELS)
 
 
@@ -90,11 +90,14 @@ async def contact_interaction(contact_id: int, request: Request, db: Session = D
 
 
 @router.post("/contacts/{contact_id:int}/delete")
-def contact_delete(contact_id: int, db: Session = Depends(get_db)):
+async def contact_delete(contact_id: int, request: Request, db: Session = Depends(get_db)):
     c = get_or_404(db, Contact, contact_id)
-    db.delete(c)
-    audit.record(db, "contact.deleted", "contact", contact_id)
-    return redirect("/contacts", msg="Contact deleted")
+    form = await form_dict(request)
+    try:
+        cs.delete_contact(db, c, form.get("reason") or "deleted from the dashboard")
+    except ValueError as exc:
+        return redirect(f"/contacts/{contact_id}", err=str(exc))
+    return redirect("/contacts", msg="Contact deleted (recorded in the audit log)")
 
 
 @router.get("/contacts/duplicates")
@@ -235,9 +238,11 @@ def draft_detail(draft_id: int, request: Request, db: Session = Depends(get_db))
     d = get_or_404(db, EmailDraft, draft_id)
     from jobpilot.integrations import gmail
 
+    settings = request.app.state.settings
     return render(request, "draft_detail.html", d=d, revisions=ds.revisions(db, d), problems=ds.approval_problems(db, d) if d.status == "draft" else [],
                   warnings=ds.recipient_warnings(d), thread=ds.thread(db, d), kind_labels=ds.KIND_LABELS,
-                  gmail_ready=gmail.is_ready(request.app.state.settings))
+                  gmail_ready=gmail.readiness(settings), gmail_problems=gmail.gmail_problems(db, d),
+                  reserved=gmail.reserved_recipient(d.to_address))
 
 
 @router.post("/drafts/{draft_id:int}")
@@ -250,9 +255,9 @@ async def draft_edit(draft_id: int, request: Request, db: Session = Depends(get_
     except (ValidationError, ds.DraftError) as exc:
         return redirect(f"/drafts/{draft_id}", err=first_error(exc))
     if had_gmail_draft and not d.gmail_draft_id:
-        return redirect(f"/drafts/{draft_id}", msg="Saved. The copy already in your Gmail Drafts is now outdated — delete "
-                                                   "it there; JobPilot will create a new one from the approved text")
-    return redirect(f"/drafts/{draft_id}", msg="Saved")
+        return redirect(f"/drafts/{draft_id}", msg="Saved locally. The copy in your Gmail Drafts is now outdated — delete "
+                                                   "it there; after re-approval, 'Create Gmail draft' makes a new one")
+    return redirect(f"/drafts/{draft_id}", msg="Saved locally (Gmail not contacted)")
 
 
 @router.post("/drafts/{draft_id:int}/{action}")
@@ -262,10 +267,11 @@ async def draft_action(draft_id: int, action: str, request: Request, db: Session
     try:
         if action == "approve":
             ds.approve(db, d, acknowledge_guessed=form.get("ack_guessed") == "1")
-            msg = "Approved. Send it yourself and click 'Mark as sent', or use Gmail if configured."
+            msg = ("Approved in JobPilot. Nothing was sent and no Gmail draft exists yet — use 'Create Gmail draft' "
+                   "to put it in your Gmail Drafts.")
         elif action == "sent":
             ds.mark_sent(db, d, via="manual")
-            msg = "Recorded as sent"
+            msg = "Recorded as sent by you (manual record: JobPilot did not send it and has not verified it with Gmail)"
         elif action == "reply":
             ds.record_reply(db, d, form.get("summary"))
             msg = "Reply recorded; follow-ups on this thread suppressed"

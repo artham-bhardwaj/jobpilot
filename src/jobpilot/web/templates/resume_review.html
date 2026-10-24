@@ -26,8 +26,8 @@ confirms it. JobPilot never edits or generates resume content to close a gap.</p
   {% if selection.warnings %}<h3>Manual-review warnings</h3>{% for w in selection.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}{% endif %}
   {% if selection.alternatives %}
   <h3>Other approved resumes</h3>
-  <table class="table compact small"><thead><tr><th>Resume</th><th>Category</th><th>Verified job skills covered</th></tr></thead>
-    {% for a in selection.alternatives %}<tr><td>{{ a.resume }}</td><td>{{ a.category }}</td><td>{{ a.coverage }}{% if a.skills %}: {{ a.skills|join(", ") }}{% endif %}</td></tr>{% endfor %}</table>
+  <div class="table-wrap"><table class="table compact small"><thead><tr><th>Resume</th><th>Category</th><th>Verified job skills covered</th></tr></thead>
+    {% for a in selection.alternatives %}<tr><td>{{ a.resume }}</td><td>{{ a.category }}</td><td>{{ a.coverage }}{% if a.skills %}: {{ a.skills|join(", ") }}{% endif %}</td></tr>{% endfor %}</table></div>
   <p class="small muted">To use a different version, choose it on the application's page (only approved versions are offered).</p>
   {% endif %}
 </section>
@@ -35,7 +35,7 @@ confirms it. JobPilot never edits or generates resume content to close a gap.</p
 <section class="card">
   <h2>Job requirements vs your verified facts</h2>
   {% if sk.mandatory or sk.preferred %}
-  <table class="table compact small">
+  <div class="table-wrap"><table class="table compact small">
     <thead><tr><th>Skill</th><th>Job says</th><th>Your profile</th><th>In resume?</th></tr></thead>
     {% for kind, items in [("required", sk.mandatory or []), ("preferred", sk.preferred or [])] %}{% for s in items %}
       {% set ev = (sk.job_evidence or {}).get(s, {}) %}{% set mine = skill_profile.get(s) %}
@@ -46,7 +46,7 @@ confirms it. JobPilot never edits or generates resume content to close a gap.</p
           {% if not mine.work and not mine.projects %}<div class="muted">no linked role or project</div>{% endif %}{% endif %}</td>
         <td>{% if selection.version %}{{ "yes" if s in ((selection.version.validation or {}).get("skills_detected") or []) else "no" }}{% else %}—{% endif %}</td></tr>
     {% endfor %}{% endfor %}
-  </table>
+  </table></div>
   {% if sk.mentioned %}<p class="small muted">Mentioned only (not requirements): {{ sk.mentioned|join(", ") }}</p>{% endif %}
   {% else %}{{ empty("No skills were recognised in this posting — review the description manually.") }}{% endif %}
   <h3>Relevant confirmed experience</h3>

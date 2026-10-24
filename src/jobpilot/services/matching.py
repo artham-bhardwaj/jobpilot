@@ -41,6 +41,8 @@ def classify(title: str, description: str | None, categories: dict[str, dict]) -
             s += 2.0 + 0.5 * (len(title_hits) - 1)
             r.append(f"title mentions {', '.join(title_hits)}")
         skill_hits = [k for k in cat.get("skill_keywords", []) if contains_term(d, k)]
+        if skill_hits and cat.get("title_required") and not title_hits:
+            skill_hits = []  # e.g. SDE I: a level only the title can state
         if skill_hits:
             s += min(1.5, 0.3 * len(skill_hits))
             r.append(f"description mentions {', '.join(skill_hits[:6])}")
@@ -85,6 +87,11 @@ def _location_check(job: Job, parsed: job_parser.ParsedRequirements, profile) ->
         return {"name": "location", "status": "unknown" if not accept else "warn",
                 "explanation": f"posting states: {cons} — verify you qualify"}
     if remote == "remote":
+        from jobpilot.services import regions
+
+        if regions.remote_elsewhere(job):
+            return {"name": "location", "status": "warn",
+                    "explanation": f"remote, but only for candidates in '{job.location}' (not India or the UAE)"}
         return {"name": "location", "status": "pass", "explanation": "remote role (check any country restrictions)"}
     if not jl:
         return {"name": "location", "status": "unknown", "explanation": "job location not stated"}
@@ -313,7 +320,19 @@ def evaluate(session: Session, job: Job, weights: dict[str, float] | None = None
     jl = normalize(job.location)
     wm = parsed.evidence.get("work_mode", {})
     loc_ev = [f"work mode: {job.remote_type} ({wm.get('basis', 'unknown')})", f"location: {job.location or 'not stated'}"]
-    if job.remote_type == "unknown":
+    any_mode = not remote_prefs or {"remote", "hybrid", "onsite"} <= set(remote_prefs)
+    if job.remote_type == "unknown" and any_mode:
+        # Every work mode is acceptable to you, so the unstated mode can't make the job less suitable: score the place.
+        missing_job.append("work arrangement (remote/hybrid/onsite)")
+        if not pref_locs:
+            frac, why = 1.0, "work mode not stated; any work mode suits your preferences"
+        elif jl and any(p in jl for p in pref_locs):
+            frac, why = 1.0, f"work mode not stated; in a preferred location ({job.location})"
+        elif not jl:
+            frac, why = 0.5, "work mode and location not stated (partial credit)"
+        else:
+            frac, why = 0.2, f"work mode not stated; {job.location} is not one of your preferred locations"
+    elif job.remote_type == "unknown":
         frac, why = 0.5, "work mode not stated (partial credit)"
         missing_job.append("work arrangement (remote/hybrid/onsite)")
     elif remote_prefs and job.remote_type not in remote_prefs:

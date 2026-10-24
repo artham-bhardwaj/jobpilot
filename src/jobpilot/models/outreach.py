@@ -113,6 +113,16 @@ class EmailDraft(TimestampMixin, Base):
     gmail_draft_id: Mapped[str | None] = mapped_column(String(100))
     gmail_message_id: Mapped[str | None] = mapped_column(String(100))
     gmail_thread_id: Mapped[str | None] = mapped_column(String(100))
+    # Gmail synchronisation state, separate from the local ``status``. Only set from Gmail API responses:
+    # None (local only) | pending (create request outcome unknown) | created | failed | outdated (local text changed)
+    # | sending (send request in flight) | send_unknown (send outcome unknown: never retried blindly) | sent
+    gmail_status: Mapped[str | None] = mapped_column(String(20))
+    gmail_error: Mapped[str | None] = mapped_column(Text)
+    gmail_synced_at: Mapped[datetime | None] = mapped_column(DateTime)
+    gmail_content_hash: Mapped[str | None] = mapped_column(String(64))  # what the Gmail draft was built from
+    gmail_attachment: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # filename/size/sha256 actually attached
+    gmail_send_attempted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    gmail_stale_draft_id: Mapped[str | None] = mapped_column(String(100))  # Gmail draft holding outdated text
     follow_up_due_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     follow_up_of_id: Mapped[int | None] = mapped_column(ForeignKey("email_drafts.id", ondelete="SET NULL"))
     reply_received_at: Mapped[datetime | None] = mapped_column(DateTime)

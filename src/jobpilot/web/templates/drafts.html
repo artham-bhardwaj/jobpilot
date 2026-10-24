@@ -10,12 +10,12 @@ draft, then send it yourself (copy) or through Gmail if you've connected it. <a 
 <section class="card">
   <h2>Follow-ups due ({{ due|length }})</h2>
   <p class="muted small">No reply recorded, contact not opted out, application still open.</p>
-  <table class="table compact">
+  <div class="table-wrap"><table class="table compact">
     {% for d in due %}<tr><td><a href="/drafts/{{ d.id }}">{{ d.subject }}</a></td><td>{{ d.contact.display_name if d.contact else d.to_address }}</td>
       <td class="nowrap">sent {{ d.sent_at|d }} · due {{ d.follow_up_due_at|d }}</td>
       <td><form method="post" action="/drafts/{{ d.id }}/followup" class="inline"><button class="small primary">draft follow-up</button></form>
           <form method="post" action="/drafts/{{ d.id }}/reply" class="inline"><button class="small">they replied</button></form></td></tr>{% endfor %}
-  </table>
+  </table></div>
 </section>
 {% endif %}
 

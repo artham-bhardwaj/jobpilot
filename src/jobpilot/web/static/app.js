@@ -6,7 +6,18 @@ document.addEventListener("submit", (ev) => {
   if (tpl && idSel) form.action = tpl.replace("{id}", encodeURIComponent(idSel.value));
   const submitter = ev.submitter;
   const msg = (submitter && submitter.dataset.confirm) || form.dataset.confirm;
-  if (msg && !window.confirm(msg)) ev.preventDefault();
+  if (msg && !window.confirm(msg)) { ev.preventDefault(); return; }
+  // Loading state: one submission per click (a double click must not post twice, e.g. "Create Gmail draft").
+  // GET forms (search/filters) are left alone.
+  if ((form.method || "get").toLowerCase() === "post" && submitter && submitter.tagName === "BUTTON") {
+    submitter.setAttribute("aria-busy", "true");
+    setTimeout(() => { submitter.disabled = true; }, 0);  // after the browser has captured the form data
+  }
+});
+
+// Back/forward cache: never show a button stuck in its busy state.
+window.addEventListener("pageshow", () => {
+  document.querySelectorAll('button[aria-busy="true"]').forEach((b) => { b.disabled = false; b.removeAttribute("aria-busy"); });
 });
 
 document.addEventListener("click", async (ev) => {

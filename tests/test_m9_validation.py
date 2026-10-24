@@ -237,6 +237,7 @@ def _approved_draft(db, gmail_settings, body):
     seed_profile(db)
     gmail.exchange_code(gmail_settings, "code", "http://127.0.0.1:1/", "v" * 64, http=GoogleStub())
     c, _ = cs.save_contact(db, cs.ContactIn(name="Jane Recruiter", email="jane@example.com", company_name="Examplecorp"))
+    cs.verify_email(db, c, "synthetic test: address confirmed")  # sending requires a verified recipient
     d = ds.create_draft(db, ds.DraftCreate(template_key="recruiter_outreach", contact_id=c.id))
     ds.edit_draft(db, d, ds.DraftEdit(to_address="jane@example.com", subject="Hello", body=body))
     ds.approve(db, d)

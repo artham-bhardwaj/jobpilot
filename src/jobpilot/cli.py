@@ -97,6 +97,13 @@ def cmd_serve(args) -> int:
         from jobpilot.services.scheduler import start_background_scheduler
 
         app.state.scheduler_thread = start_background_scheduler(settings, app.state.sessionmaker)
+    from jobpilot.integrations import telegram
+
+    if settings.telegram_commands_enabled and telegram.is_ready(settings):
+        from jobpilot.services.telegram_bot import start_poller
+
+        app.state.telegram_thread = start_poller(settings, app.state.sessionmaker)
+        print("Telegram: answering commands from your chat (changes only through /answer, /cooldown, pause/resume, batch buttons and your tracker answers)", flush=True)
     print(f"JobPilot running at http://{settings.host}:{settings.port}", flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
     return 0

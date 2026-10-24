@@ -36,7 +36,7 @@ suggested or filled automatically.</p>
 <section class="card">
   <h2>Saved answers ({{ entries|length }})</h2>
   {% if entries %}
-  <table class="table">
+  <div class="table-wrap"><table class="table">
     <thead><tr><th>Question</th><th>Answer</th><th>Category</th><th>Status</th><th></th></tr></thead>
     {% for e in entries %}<tr>
       <td class="wrap">{{ e.question }}{% if e.role_categories %}<div class="muted small">{{ e.role_categories|join(", ") }}</div>{% endif %}</td>
@@ -46,7 +46,7 @@ suggested or filled automatically.</p>
       <td class="nowrap"><a class="button small" href="/answers?edit={{ e.id }}">edit</a>
         <form method="post" action="/answers/{{ e.id }}/delete" class="inline" data-confirm="Delete this answer?"><button class="small danger">delete</button></form></td>
     </tr>{% endfor %}
-  </table>
+  </table></div>
   {% else %}{{ empty("No saved answers yet.") }}{% endif %}
 </section>
 {% endblock %}

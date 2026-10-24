@@ -1,0 +1,46 @@
+# JobPilot in Docker: ONE container = dashboard + internal scheduler + Telegram poller (all started by `jobpilot serve`).
+# Not for running alongside the native install against the same data or Telegram bot (see docs/DOCKER.md).
+name: jobpilot
+
+services:
+  jobpilot:
+    build:
+      context: .
+    image: jobpilot:${JOBPILOT_IMAGE_TAG:-local}
+    # Settings and secrets from a file you create from .env.docker.example (never baked into the image).
+    env_file:
+      - path: ${JOBPILOT_ENV_FILE_DOCKER:-.env.docker}
+        required: true
+    # These override env_file so paths and binding are always right inside the container.
+    environment:
+      JOBPILOT_DATA_DIR: /data
+      JOBPILOT_HOST: 0.0.0.0
+      JOBPILOT_PORT: "8765"
+      JOBPILOT_ALLOW_REMOTE_BIND: "true"
+    ports:
+      # Published on the host's loopback only. JobPilot has no login: never publish it on 0.0.0.0.
+      - "127.0.0.1:${JOBPILOT_HOST_PORT:-8765}:8765"
+    volumes:
+      # All state: database, files (resumes), backups, logs, secrets (Gmail OAuth), locks.
+      # Default: a named volume. For a host directory set JOBPILOT_DATA_SOURCE=/srv/jobpilot/data (see docs).
+      - ${JOBPILOT_DATA_SOURCE:-jobpilot-data}:/data
+    user: "${JOBPILOT_UID:-10001}:${JOBPILOT_GID:-10001}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 90s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  jobpilot-data:

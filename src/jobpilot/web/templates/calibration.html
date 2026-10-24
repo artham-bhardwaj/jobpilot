@@ -19,7 +19,7 @@ only when you save them, and existing scores update only when you re-score.</p>
 <div class="grid-2">
 <section class="card">
   <h2>Current weights</h2>
-  <table class="table compact">{% for k in keys %}<tr><td>{{ k|replace("_", " ") }}</td><td>{{ weights[k] }}</td><td class="muted">{{ weights_pct[k] }}% of 100</td></tr>{% endfor %}</table>
+  <div class="table-wrap"><table class="table compact">{% for k in keys %}<tr><td>{{ k|replace("_", " ") }}</td><td>{{ weights[k] }}</td><td class="muted">{{ weights_pct[k] }}% of 100</td></tr>{% endfor %}</table></div>
   <p class="small muted">Thresholds: relevant ≥ {{ matching.relevance_threshold }}, strong ≥ {{ matching.strong_threshold }},
     review band from {{ matching.review_band_low }} (Settings → matching).</p>
   {% if changed %}
@@ -41,9 +41,9 @@ only when you save them, and existing scores update only when you re-score.</p>
       {{ report.useful_but_scored_below|length }} useful job(s) scored below it</td></tr>
   </table>
   {% if not report.enough_data %}<p class="notice warn small">Fewer than 5 judgements in each group — treat comparisons as anecdotal.</p>{% endif %}
-  <table class="table compact small"><thead><tr><th>Component (mean fraction earned)</th><th>useful</th><th>irrelevant</th></tr></thead>
+  <div class="table-wrap"><table class="table compact small"><thead><tr><th>Component (mean fraction earned)</th><th>useful</th><th>irrelevant</th></tr></thead>
     {% for k in keys %}<tr><td>{{ k|replace("_", " ") }}</td><td>{{ report.component_means_useful[k] if report.component_means_useful[k] is not none else "—" }}</td><td>{{ report.component_means_irrelevant[k] if report.component_means_irrelevant[k] is not none else "—" }}</td></tr>{% endfor %}
-  </table>
+  </table></div>
   <p class="small muted">A component that is high for irrelevant jobs may deserve less weight; this is a hint, not a rule.</p>
   {% else %}{{ empty("No feedback yet. Mark jobs below as useful or irrelevant.") }}{% endif %}
 </section>

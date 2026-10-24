@@ -8,6 +8,9 @@
   {% if c.do_not_contact %}{{ badge("do not contact", "b-do_not_contact") }}{% endif %}</p>
 {% if blocked %}<div class="notice bad">{{ blocked }}</div>{% endif %}
 {% if c.email_status == "guessed" %}<div class="notice bad">This email address is <b>guessed</b> — it has not been verified and may reach the wrong person.</div>{% endif %}
+{% if domain_warning %}<div class="notice">⚠️ {{ domain_warning }}</div>{% endif %}
+{% if c.email_status == "bounced" %}<div class="notice bad">Mail to this address <b>bounced</b>. It is blocked for outreach.</div>{% endif %}
+{% if c.email_status == "apollo_reported" %}<div class="notice">Apollo reported this address as valid. JobPilot has not confirmed it; mark it verified only when you have (e.g. they replied).</div>{% endif %}
 
 <div class="grid-2">
 <section class="card">
@@ -71,10 +74,10 @@
 <section class="card">
   <h2>Contact history</h2>
   {% if c.interactions %}
-  <table class="table compact">
+  <div class="table-wrap"><table class="table compact">
     <thead><tr><th>When</th><th>Channel</th><th>Direction</th><th>Summary</th></tr></thead>
     {% for i in c.interactions %}<tr><td class="nowrap">{{ i.ts|dt }}</td><td>{{ i.channel }}</td><td>{{ i.direction }}</td><td class="wrap">{{ i.summary }}</td></tr>{% endfor %}
-  </table>
+  </table></div>
   {% else %}{{ empty("No interactions logged.") }}{% endif %}
   <form method="post" action="/contacts/{{ c.id }}/interaction" class="filters">
     {{ select("channel", "Channel", ["email","linkedin","phone","in_person","other"]) }}

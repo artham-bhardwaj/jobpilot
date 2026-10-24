@@ -62,16 +62,24 @@ def create_backup(settings: Settings, engine: Engine | None = None, label: str =
         from jobpilot.db import current_revision
 
         revision = current_revision(engine)
+    part = dest.with_name(dest.name + ".part")
     with tempfile.TemporaryDirectory() as tmp:
         snap = Path(tmp) / "jobpilot.db"
         _sqlite_copy(db_file, snap)
+        check = sqlite3.connect(snap)
+        try:
+            integrity = check.execute("PRAGMA quick_check").fetchone()[0]
+        finally:
+            check.close()
+        if integrity != "ok":
+            raise BackupError(f"database snapshot failed its integrity check ({integrity}); no backup written")
         manifest = {
             "app_version": __version__,
             "created_at": utcnow().isoformat(),
             "label": label,
             "alembic_revision": revision,
         }
-        with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(part, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.write(snap, "jobpilot.db")
             zf.writestr("manifest.json", json.dumps(manifest, indent=2))
             if settings.files_dir.exists():
@@ -79,11 +87,31 @@ def create_backup(settings: Settings, engine: Engine | None = None, label: str =
                     if p.is_file():
                         zf.write(p, f"files/{p.relative_to(settings.files_dir).as_posix()}")
     try:
-        dest.chmod(0o600)
+        part.chmod(0o600)
     except OSError:
         pass
+    problem = verify_backup(part)
+    if problem:
+        part.unlink(missing_ok=True)
+        raise BackupError(f"backup verification failed ({problem}); no backup written")
+    part.replace(dest)  # atomic: an interrupted backup never leaves a truncated *.zip behind
     log.info("backup created", extra={"path": str(dest), "label": label})
     return dest
+
+
+def verify_backup(path: Path) -> str | None:
+    """None if ``path`` is a readable JobPilot backup, otherwise what is wrong with it."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+            if "jobpilot.db" not in names or "manifest.json" not in names:
+                return "missing jobpilot.db or manifest.json"
+            bad = zf.testzip()
+            if bad:
+                return f"corrupt member {bad}"
+    except (zipfile.BadZipFile, OSError) as exc:
+        return f"unreadable: {type(exc).__name__}"
+    return None
 
 
 def list_backups(settings: Settings) -> list[dict]:
@@ -181,9 +209,17 @@ def restore_backup(settings: Settings, backup_path: Path, engine: Engine | None 
 
 
 def prune_backups(settings: Settings, keep: int = 20) -> int:
+    """Delete the oldest backups beyond the ``keep`` newest *valid* ones.
+
+    Only valid backups count towards ``keep``, so a run of broken files can never push out the last good backup;
+    nothing is deleted unless at least one valid backup remains. Invalid files are left for you to inspect.
+    """
     files = sorted(settings.backup_dir.glob("jobpilot-*.zip"), reverse=True)
+    valid = [p for p in files if verify_backup(p) is None]
+    if not valid:
+        return 0
     removed = 0
-    for p in files[keep:]:
+    for p in valid[max(keep, 1):]:
         p.unlink(missing_ok=True)
         removed += 1
     return removed

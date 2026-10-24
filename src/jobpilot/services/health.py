@@ -6,7 +6,7 @@ import importlib.util
 import shutil
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from jobpilot import __version__
@@ -47,7 +47,27 @@ def check(settings: Settings, session: Session, deep: bool = False) -> dict:
         else f"enabled; client secrets {'found' if gmail_cfg else 'MISSING'}; "
              f"{'authorized' if gmail_tok else 'not authorized'}",
     }
-    checks["scheduler"] = {"ok": True, "detail": "in-process" if settings.scheduler_enabled else "manual / external timer"}
+    from jobpilot.services import scheduler as sched_svc
+
+    rep = sched_svc.status_report(session, settings)
+    lp = rep["last_pass"] or {}
+    checks["scheduler"] = {
+        "ok": not rep["pass_overdue"],
+        "detail": ("in-process" if settings.scheduler_enabled else "manual / external timer")
+        + (f"; running (pid {rep['runner']['pid']})" if rep["live"] else "")
+        + (f"; last pass {lp['finished_at']} UTC" if lp else "; no pass recorded")
+        + ("; next pass OVERDUE" if rep["pass_overdue"] else ""),
+    }
+    from jobpilot.integrations import telegram
+    from jobpilot.models import Notification
+
+    tg = telegram.config_status(settings)
+    stuck = session.scalar(select(func.count(Notification.id)).where(Notification.status == "failed")) or 0
+    checks["telegram"] = {
+        "ok": not (tg["enabled"] and stuck),
+        "detail": ("disabled" if not tg["enabled"] else "configured" if tg["ready"] else "incomplete: " + "; ".join(tg["problems"]))
+        + (f"; {stuck} notification(s) failed to deliver" if stuck else ""),
+    }
 
     failed = session.scalar(select(TaskRun).where(TaskRun.status == "failed").order_by(TaskRun.id.desc()).limit(1))
     checks["last_task_failure"] = {

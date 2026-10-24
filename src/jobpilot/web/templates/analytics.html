@@ -83,9 +83,9 @@ denominator; below that you see the raw counts. "Missing" means the data isn't k
   <h2>Resume selection by role category</h2>
   <p class="small muted">For {{ s.resume_selection.jobs_considered }} relevant active job(s) without hard conflicts.</p>
   {% if s.resume_selection.by_category %}
-  <table class="table compact small"><thead><tr><th>Category</th><th>Jobs</th><th>Matching variant</th><th>Fallback</th><th>Unsuitable</th><th>No resume</th></tr></thead>
+  <div class="table-wrap"><table class="table compact small"><thead><tr><th>Category</th><th>Jobs</th><th>Matching variant</th><th>Fallback</th><th>Unsuitable</th><th>No resume</th></tr></thead>
     {% for cat, r in s.resume_selection.by_category.items() %}<tr><td>{{ cat }}</td><td>{{ r.jobs }}</td><td>{{ r.exact }}</td><td>{{ r.fallback }}</td><td>{{ r.unsuitable }}</td><td>{{ r.missing }}</td></tr>{% endfor %}
-  </table>{% else %}{{ empty("No relevant jobs yet.") }}{% endif %}
+  </table></div>{% else %}{{ empty("No relevant jobs yet.") }}{% endif %}
   {% if s.resume_selection.applications_by_resume_category %}<p class="small">Applications by resume category:
     {% for k, v in s.resume_selection.applications_by_resume_category.items() %}<span class="tag">{{ k }} · {{ v }}</span>{% endfor %}</p>{% endif %}
 </section>
@@ -95,8 +95,8 @@ denominator; below that you see the raw counts. "Missing" means the data isn't k
   <h2>Common skill gaps</h2>
   {% if s.skill_gaps.top %}
   <p class="small muted">Across {{ s.skill_gaps.jobs_analyzed }} relevant/shortlisted/applied job(s){% if s.skill_gaps.jobs_analyzed < 5 %} — too few to generalise{% endif %}.</p>
-  <table class="table compact small"><thead><tr><th>Skill</th><th>Your status</th><th>Required in</th><th>Preferred in</th><th>Share of jobs</th></tr></thead>
-    {% for g in s.skill_gaps.top %}<tr><td>{{ g.skill }}</td><td>{{ g.status }}</td><td>{{ g.required_in }}</td><td>{{ g.preferred_in }}</td><td>{{ g.share|pct }}</td></tr>{% endfor %}</table>
+  <div class="table-wrap"><table class="table compact small"><thead><tr><th>Skill</th><th>Your status</th><th>Required in</th><th>Preferred in</th><th>Share of jobs</th></tr></thead>
+    {% for g in s.skill_gaps.top %}<tr><td>{{ g.skill }}</td><td>{{ g.status }}</td><td>{{ g.required_in }}</td><td>{{ g.preferred_in }}</td><td>{{ g.share|pct }}</td></tr>{% endfor %}</table></div>
   <p class="small"><a href="/skills">Skill-gap details and learning backlog →</a></p>
   {% else %}{{ empty("No gaps found (or no relevant jobs yet).") }}{% endif %}
 </section>
@@ -104,10 +104,10 @@ denominator; below that you see the raw counts. "Missing" means the data isn't k
 <section class="card">
   <h2>Resume performance</h2>
   {% if s.resumes %}
-  <table class="table">
+  <div class="table-wrap"><table class="table">
     <thead><tr><th>Resume version</th><th>Applications</th><th>Responses</th><th>Interviews</th></tr></thead>
     {% for r in s.resumes %}<tr><td>{{ r.resume }}</td><td>{{ r.applications }}</td><td>{{ rate(r.responses) }}</td><td>{{ rate(r.interviews) }}</td></tr>{% endfor %}
-  </table>
+  </table></div>
   <p class="muted small">Differences between resumes are not causal: they're confounded by which jobs each was used for.</p>
   {% else %}{{ empty("No submitted applications yet.") }}{% endif %}
 </section>

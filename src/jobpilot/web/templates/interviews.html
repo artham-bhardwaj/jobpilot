@@ -8,12 +8,12 @@
 <section class="card">
   <h2>Upcoming</h2>
   {% if upcoming %}
-  <table class="table">
+  <div class="table-wrap"><table class="table">
     {% for i in upcoming %}<tr><td class="nowrap">{{ i.scheduled_at|dt if i.scheduled_at else "date TBD" }} {{ i.timezone or "" }}</td>
       <td><a href="/interviews/{{ i.id }}">{{ i.application.job.title }}</a> · {{ i.application.job.company_name or "?" }}</td>
       <td>round {{ i.round_no }}{% if i.round_name %} · {{ i.round_name }}{% endif %}</td><td>{{ i.stage|replace("_"," ") }}</td><td>{{ i.format }}</td>
       <td>{% if i.prep_packs %}{{ badge("prep ready", "b-ok") }}{% endif %}</td></tr>{% endfor %}
-  </table>
+  </table></div>
   {% else %}{{ empty("No upcoming interviews.") }}{% endif %}
 </section>
 
@@ -62,11 +62,11 @@
 <section class="card">
   <h2>Past &amp; cancelled</h2>
   {% if past %}
-  <table class="table compact">
+  <div class="table-wrap"><table class="table compact">
     {% for i in past %}<tr><td class="nowrap">{{ i.scheduled_at|dt }}</td><td><a href="/interviews/{{ i.id }}">{{ i.application.job.title }}</a> · {{ i.application.job.company_name or "?" }}</td>
       <td>{{ i.stage|replace("_"," ") }}</td><td>{{ badge(i.status) }}</td><td>{{ badge(i.outcome) }}</td>
       <td>{% if i.follow_up_actions and not i.follow_up_done %}{{ badge("follow-up open", "b-warn") }}{% endif %}</td></tr>{% endfor %}
-  </table>
+  </table></div>
   {% else %}{{ empty("None yet.") }}{% endif %}
 </section>
 {% endblock %}

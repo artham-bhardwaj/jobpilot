@@ -190,6 +190,7 @@ def test_gmail_send_requires_approval_and_confirmation(db, gmail_settings):
     job, _ = job_svc.add_manual(db, job_svc.ManualJobIn(title="Java Backend Engineer", company_name="Examplecorp",
                                                         description_text="Requirements: Java"))
     c, _ = cs.save_contact(db, cs.ContactIn(name="Jane Recruiter", email="jane@example.com", company_name="Examplecorp"))
+    cs.verify_email(db, c, "synthetic test: address confirmed")  # sending requires a verified recipient
     d = ds.create_draft(db, ds.DraftCreate(template_key="recruiter_outreach", job_id=job.id, contact_id=c.id))
     stub = GoogleStub()
     client = gmail.GmailClient(gmail_settings, http=stub)
@@ -219,6 +220,7 @@ def test_gmail_daily_limit_and_dnc(db, gmail_settings):
     drafts = []
     for i in range(2):
         c, _ = cs.save_contact(db, cs.ContactIn(name=f"Person {i}", email=f"p{i}@example.org", company_name="Examplecorp"))
+        cs.verify_email(db, c, "synthetic test: address confirmed")  # sending requires a verified recipient
         d = ds.create_draft(db, ds.DraftCreate(template_key="recruiter_outreach", contact_id=c.id))
         ds.edit_draft(db, d, ds.DraftEdit(to_address=d.to_address, subject="Hello", body="Hi, synthetic test."))
         ds.approve(db, d)

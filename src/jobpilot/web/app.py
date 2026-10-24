@@ -154,7 +154,11 @@ def create_app(settings: Settings | None = None, run_migrations: bool = True) ->
         if thread is not None:
             thread.stop_event.set()
             thread.join(timeout=60)
+        poller = getattr(_app.state, "telegram_thread", None)
+        if poller is not None:  # a long poll in progress ends within its timeout; the thread is a daemon
+            poller.stop_event.set()
         _app.state.engine.dispose()
+        log.info("shutdown complete", extra={"scheduler_stopped": thread is None or not thread.is_alive()})
 
     # No Swagger/ReDoc UI (they load third-party CDN assets); the JSON schema is opt-in.
     app = FastAPI(title="JobPilot", version=__version__, docs_url=None, redoc_url=None,

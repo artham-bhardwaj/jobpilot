@@ -15,8 +15,8 @@ field; the other only fills blanks. History, drafts and job links move over, and
       <div>{{ c.email or "no email" }} {% if c.email %}{{ badge(c.email_status) }}{% endif %}{% if c.do_not_contact %} {{ badge("do not contact", "b-do_not_contact") }}{% endif %}</div>
       <div class="muted">source: {{ c.source_type }} · discovered {{ c.discovered_at|d }}</div></div>{% endfor %}
   </div>
-  {% if p.conflicts %}<table class="table compact small"><thead><tr><th>Field</th><th>#{{ p.a.id }}</th><th>#{{ p.b.id }}</th></tr></thead>
-    {% for f, va, vb in p.conflicts %}<tr><td>{{ f }}</td><td>{{ va }}</td><td>{{ vb }}</td></tr>{% endfor %}</table>{% endif %}
+  {% if p.conflicts %}<div class="table-wrap"><table class="table compact small"><thead><tr><th>Field</th><th>#{{ p.a.id }}</th><th>#{{ p.b.id }}</th></tr></thead>
+    {% for f, va, vb in p.conflicts %}<tr><td>{{ f }}</td><td>{{ va }}</td><td>{{ vb }}</td></tr>{% endfor %}</table></div>{% endif %}
   {% for keep, other in ((p.a, p.b), (p.b, p.a)) %}
   <form method="post" action="/contacts/merge" class="inline">
     <input type="hidden" name="keep_id" value="{{ keep.id }}"><input type="hidden" name="other_id" value="{{ other.id }}">

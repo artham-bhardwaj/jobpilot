@@ -2,26 +2,82 @@
 {% from "_macros.html" import badge, empty, score, post_button %}
 {% block title %}{{ job.title }}{% endblock %}
 {% block content %}
-<p><a href="/jobs">← Jobs</a></p>
-<h1>{{ job.title }}</h1>
-<p>
-  <b>{{ job.company_name or "Company not stated" }}</b> · {{ job.location or "location not stated" }} · {{ job.remote_type }}
-  {% if job.employment_type %} · {{ job.employment_type }}{% endif %}
-  {% if job.department %} · {{ job.department }}{% endif %}
-  <br>{{ badge(job.status) }} {{ badge(job.user_status) }} {{ badge(job.eligibility) }}
-  {% if job.repost_of_id %}<a href="/jobs/{{ job.repost_of_id }}">{{ badge("repost of #" ~ job.repost_of_id, "b-warn") }}</a>{% endif %}
-</p>
-<div class="actions">
-  {% if job.source_url %}<a class="button" href="{{ job.source_url }}" target="_blank" rel="noopener noreferrer">View posting ↗</a>{% endif %}
-  {% if job.apply_url %}<a class="button" href="{{ job.apply_url }}" target="_blank" rel="noopener noreferrer">Apply page ↗</a>{% endif %}
-  {% block job_primary_actions %}{% endblock %}
-  {% for st in ["shortlisted", "dismissed", "new"] if st != job.user_status %}
-    {{ post_button("/jobs/" ~ job.id ~ "/status", {"shortlisted": "Shortlist", "dismissed": "Dismiss", "new": "Reset triage"}[st], hidden={"status": st}) }}
-  {% endfor %}
-  {{ post_button("/jobs/" ~ job.id ~ "/rematch", "Re-score") }}
-  {{ post_button("/jobs/" ~ job.id ~ "/check", "Check still open") }}
-  {% if job.status == "active" %}{{ post_button("/jobs/" ~ job.id ~ "/expire", "Mark expired", confirm="Mark this job as expired?") }}{% endif %}
-</div>
+<p><a href="/jobs" data-back>← Jobs</a></p>
+<header class="job-head">
+  <div class="job-head-main">
+    <h1>{% if job.relevance_score is not none %}{{ score(job.relevance_score) }} {% endif %}{{ job.title }}</h1>
+    <p class="job-meta">
+      <b>{{ job.company_name or "Company not stated" }}</b> · {{ job.location or "location not stated" }} · {{ job.remote_type }} {{ job|region_badges }}
+      {% if job.employment_type %} · {{ job.employment_type }}{% endif %}
+      {% if job.department %} · {{ job.department }}{% endif %}
+      {% if job.posted_at %} · posted {{ job.posted_at|d }}{% endif %}
+    </p>
+    <p>{{ badge(job.eligibility) }} {% if job.status != "active" %}{{ badge(job.status) }} {% endif %}{% if job.user_status != "new" %}{{ badge(job.user_status) }}{% endif %}
+      {% if job.repost_of_id %}<a href="/jobs/{{ job.repost_of_id }}">{{ badge("repost of #" ~ job.repost_of_id, "b-warn") }}</a>{% endif %}</p>
+  </div>
+</header>
+
+{# Apply panel: everything needed to apply yourself and record it, in one place. #}
+{% set apply_link = job.apply_url or job.source_url %}
+{% set tr = tailored_resume %}
+{% set tr_ready = tr and tr.status == "valid" and tr.pdf_path %}
+<section class="apply-panel{% if application and application.applied_at %} done{% endif %}" id="apply" aria-label="Apply">
+  <div class="apply-step">
+    <span class="step-n">1</span>
+    <div><div class="step-t">Resume</div>
+      {% if tr_ready %}<a class="button small" href="/tailored-resumes/{{ tr.id }}/download">Download tailored PDF</a>
+        <div class="small muted">made for this job {{ tr.created_at|d }}</div>
+      {% elif not selection.missing %}<a class="button small" href="/resumes/versions/{{ selection.version.id }}/download">Download {{ selection.version.resume.name }} v{{ selection.version.version_no }}</a>
+        <div class="small muted"><a href="#tailored">or create one for this job</a></div>
+      {% else %}<a class="button small" href="/resumes">Add a resume</a>{% endif %}
+    </div>
+  </div>
+  <div class="apply-step">
+    <span class="step-n">2</span>
+    <div><div class="step-t">Apply</div>
+      {% if apply_link %}<a class="button primary" href="{{ apply_link }}" target="_blank" rel="noopener noreferrer">{{ "Apply on company site" if job.apply_url else "Open posting" }} ↗</a>
+        {% if job.apply_url and job.source_url and job.source_url != job.apply_url %}<div class="small"><a href="{{ job.source_url }}" target="_blank" rel="noopener noreferrer">view posting ↗</a></div>{% endif %}
+      {% else %}<span class="muted small">No link captured. Search the company's careers page.</span>{% endif %}
+    </div>
+  </div>
+  <div class="apply-step grow">
+    <span class="step-n">3</span>
+    <div class="grow"><div class="step-t">Record it</div>
+    {% if application and application.applied_at %}
+      <p class="applied-line">✓ Applied {{ application.applied_at|d }} {{ badge(application.status) }}
+        · <a href="/applications/{{ application.id }}">application #{{ application.id }}</a></p>
+      {% if application.confirmation_note %}<div class="small muted">{{ application.confirmation_note }}</div>{% endif %}
+    {% else %}
+      <form method="post" action="/tracker/jobs/{{ job.id }}/applied" class="apply-form">
+        <label class="field"><span>Resume used</span><select name="resume_version_id">
+          {% if tr_ready %}<option value="tailored" selected>Tailored resume for this job</option>{% endif %}
+          {% for v in approved_resumes %}<option value="{{ v.id }}" {% if not tr_ready and not selection.missing and v.id == selection.version.id %}selected{% endif %}>{{ v.resume.name }} v{{ v.version_no }}</option>{% endfor %}
+          <option value="">another resume</option></select></label>
+        <label class="field"><span>Date</span><input type="date" name="applied_on" value="{{ today }}" max="{{ today }}"></label>
+        <input type="hidden" name="next" value="/jobs/{{ job.id }}">
+        <button class="primary">✓ I applied</button>
+      </form>
+      <div class="actions small-actions">
+        {% if job.user_status != "shortlisted" %}{{ post_button("/jobs/" ~ job.id ~ "/status", "Save for later", "small", hidden={"status": "shortlisted", "next": "/jobs/" ~ job.id}) }}{% endif %}
+        {{ post_button("/tracker/jobs/" ~ job.id ~ "/later", "Not interested", "small", hidden={"action": "not_interested", "next": "/jobs"}) }}
+      </div>
+    {% endif %}
+    </div>
+  </div>
+</section>
+
+<details class="more-actions">
+  <summary>More actions</summary>
+  <div class="actions">
+    {% block job_primary_actions %}{% endblock %}
+    {% for st in ["shortlisted", "dismissed", "new"] if st != job.user_status %}
+      {{ post_button("/jobs/" ~ job.id ~ "/status", {"shortlisted": "Shortlist", "dismissed": "Dismiss", "new": "Reset triage"}[st], "small", hidden={"status": st}) }}
+    {% endfor %}
+    {{ post_button("/jobs/" ~ job.id ~ "/rematch", "Re-score", "small") }}
+    {{ post_button("/jobs/" ~ job.id ~ "/check", "Check still open", "small") }}
+    {% if job.status == "active" %}{{ post_button("/jobs/" ~ job.id ~ "/expire", "Mark expired", "small", confirm="Mark this job as expired?") }}{% endif %}
+  </div>
+</details>
 
 {% if not job.matched_at %}<div class="notice warn">This job hasn't been scored with your current profile and settings yet. Click <b>Re-score</b>.</div>{% endif %}
 {% if m.recommendation %}
@@ -37,10 +93,10 @@
   <h2>Relevance {{ score(job.relevance_score) }} <span class="muted small">relevant ≥ {{ m.relevance.threshold if m.relevance else "" }}{% if m.relevance and m.relevance.strong_threshold %}, strong ≥ {{ m.relevance.strong_threshold }}{% endif %}</span></h2>
   {% if m.relevance and m.relevance.excluded_by %}<div class="notice bad">Excluded by keyword(s): {{ m.relevance.excluded_by|join(", ") }}</div>{% endif %}
   {% if m.relevance %}
-  <table class="table compact">
+  <div class="table-wrap"><table class="table compact">
     {% for c in m.relevance.components %}<tr><td class="nowrap">{{ c.name }}</td><td class="nowrap">{{ c.points }} / {{ c.max }}</td>
       <td class="wrap">{{ c.explanation }}{% if c.evidence %}<details><summary class="small">evidence</summary><ul class="small">{% for e in c.evidence %}<li>{{ e }}</li>{% endfor %}</ul></details>{% endif %}</td></tr>{% endfor %}
-  </table>
+  </table></div>
   <p class="small muted"><a href="/matching">Weights and calibration →</a></p>
   {% endif %}
   {% if m.category %}<p class="small muted">Category: {{ m.category.label or "none" }} (confidence {{ m.category.confidence }})</p>{% endif %}
@@ -51,9 +107,9 @@
   <p class="muted small">Based on the posting's stated requirements and your <b>confirmed</b> profile facts. Unknown
   requirements are never treated as met. <b>HARD</b> = a conflict that makes the job unsuitable regardless of score.</p>
   {% if m.eligibility %}
-  <table class="table compact">
+  <div class="table-wrap"><table class="table compact">
     {% for c in m.eligibility.checks %}<tr><td class="nowrap">{{ c.name }}</td><td class="nowrap">{{ badge(c.status) }}{% if c.hard %} {{ badge("HARD", "b-failed") }}{% endif %}</td><td class="wrap">{{ c.explanation }}</td></tr>{% endfor %}
-  </table>
+  </table></div>
   {% endif %}
   {% if m.missing_profile_info %}<p class="small"><b>Missing from your profile:</b> {{ m.missing_profile_info|join(", ") }} — <a href="/profile">add if accurate</a></p>{% endif %}
   {% if m.missing_job_info %}<p class="small"><b>Not stated in the posting:</b> {{ m.missing_job_info|join(", ") }}</p>{% endif %}
@@ -61,6 +117,11 @@
     {% for sgn in m.confidence.signals %}<li>{{ "✔" if sgn.ok else "✖" }} {{ sgn.name }}</li>{% endfor %}</ul></details>{% endif %}
 </section>
 </div>
+
+<section class="card" id="description">
+  <h2>Description</h2>
+  {% if job.description_text %}<div class="desc">{{ job.description_text }}</div>{% else %}{{ empty("No description captured.") }}{% endif %}
+</section>
 
 <div class="grid-2">
 <section class="card">
@@ -108,6 +169,27 @@
       {% for a in selection.alternatives %}<li>{{ a.resume }} ({{ a.category }}) — covers {{ a.coverage }} job skill(s)</li>{% endfor %}</ul></details>{% endif %}
   {% endif %}
   {% block job_resume_extra %}{% endblock %}
+  <h3 id="tailored">Resume for this job</h3>
+  {% if tr %}
+    <p>{{ badge(tr.status) }} <span class="small">generated {{ tr.created_at|d }} from resume version #{{ tr.source_version_id }}
+      · compile {{ tr.compile_status or "—" }} · validation {{ tr.validation_status or "—" }}{% if tr.page_count %} · {{ tr.page_count }} page(s){% endif %}
+      {% if tr.attached_application_id %} · attached to application #{{ tr.attached_application_id }} {{ tr.attached_at|d }}{% endif %}</span></p>
+    {% if tr.status in ("valid", "superseded", "outdated") and tr.pdf_path %}<p><a href="/tailored-resumes/{{ tr.id }}/download">download PDF</a></p>{% endif %}
+    {% if tr.error %}<div class="notice bad small">{{ tr.error }}</div>{% endif %}
+    {% if tr.decisions %}<details><summary class="small">tailoring decisions</summary><div class="small">
+      {% for w in tr.decisions.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}
+      {% if tr.decisions.not_claimed %}<p>Job skills you don't have (left out, never added): {{ tr.decisions.not_claimed|join(", ") }}</p>{% endif %}
+      {% if tr.decisions.excluded %}<p>Left out (no confirmed fact): {% for e in tr.decisions.excluded %}{{ e.text }}; {% endfor %}</p>{% endif %}
+      <ul>{% for m in tr.decisions.mapping %}<li>{{ m.section }}: {{ m.text[:90] }} ← {{ m.fact }}{% if m.job_skills %} (job skills: {{ m.job_skills|join(", ") }}){% endif %}</li>{% endfor %}</ul>
+    </div></details>{% endif %}
+  {% else %}<p class="small muted">None yet.</p>{% endif %}
+  {% if not tailored_template %}<div class="notice warn small">No resume template registered: <code>jobpilot resume template --file your_resume.tex</code></div>
+  {% elif not tailored_compiler %}<div class="notice warn small">No LaTeX compiler: <code>sudo apt install latexmk texlive-latex-recommended texlive-fonts-recommended</code></div>
+  {% else %}
+    <p class="small muted">Made only when you ask. It re-orders your approved resume for this job; nothing is invented.
+      {% if tailored_eligible[1] != "ready" %}Note: {{ tailored_eligible[1] }}.{% endif %}</p>
+    <form method="post" action="/jobs/{{ job.id }}/tailored-resume" class="inline"><button class="{{ 'small' if tr else 'primary' }}">{{ "Check / regenerate" if tr else "Create resume for this job" }}</button></form>
+  {% endif %}
 </section>
 </div>
 
@@ -134,11 +216,6 @@
   <p><a class="button small" href="/contacts?job_id={{ job.id }}">Add a contact for this job</a></p>
   {% if drafts %}<h3>Drafts</h3>
     {% for d in drafts %}<div><a href="/drafts/{{ d.id }}">{{ d.subject }}</a> {{ badge(d.status) }}</div>{% endfor %}{% endif %}
-</section>
-
-<section class="card">
-  <h2>Description</h2>
-  {% if job.description_text %}<div class="desc">{{ job.description_text }}</div>{% else %}{{ empty("No description captured.") }}{% endif %}
 </section>
 
 <div class="grid-2">

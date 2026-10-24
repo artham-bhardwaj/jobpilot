@@ -7,9 +7,11 @@
       {% if application.applied_at %}· applied {{ application.applied_at|d }}{% endif %}</p>
   {% else %}
     {% if duplicates %}<div class="notice warn">Possible duplicate of: {% for a, r in duplicates %}<a href="/applications/{{ a.id }}">#{{ a.id }}</a> ({{ r }}){% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
+    <p class="small muted">Applying yourself? Use <a href="#apply">I applied</a> above. Preparing an application here is
+      optional: it builds a checklist, form answers and a resume choice for review before you submit.</p>
     <form method="post" action="/jobs/{{ job.id }}/application" class="filters">
       {% if duplicates %}<label class="field"><span>Why this isn't a duplicate</span><input type="text" name="override_note" required></label>{% endif %}
-      <div class="actions"><button class="primary">Start application (prepare)</button></div>
+      <div class="actions"><button>Start application (prepare)</button></div>
     </form>
   {% endif %}
 </section>

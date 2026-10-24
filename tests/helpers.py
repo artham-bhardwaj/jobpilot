@@ -17,6 +17,11 @@ class FakeSession(requests.Session):
         super().__init__()
         self.routes = routes
         self.calls: list[str] = []
+        self.posts: list[tuple[str, dict | None]] = []
+
+    def post(self, url, json=None, **kwargs):  # noqa: D401 - mimic requests (public JSON search endpoints)
+        self.posts.append((url, json))
+        return self.get(url, **kwargs)
 
     def get(self, url, params=None, **kwargs):  # noqa: D401 - mimic requests
         self.calls.append(url)

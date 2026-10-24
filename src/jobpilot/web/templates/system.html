@@ -20,7 +20,7 @@
   browser profile. Restoring first saves the current state as a new backup.</p>
   <form method="post" action="/system/backup" class="inline"><button class="primary">Create backup now</button></form>
   {% if backups %}
-  <table class="table">
+  <div class="table-wrap"><table class="table">
     <thead><tr><th>File</th><th>Size</th><th>Created</th><th></th></tr></thead>
     <tbody>
     {% for b in backups %}
@@ -38,8 +38,19 @@
       </tr>
     {% endfor %}
     </tbody>
-  </table>
+  </table></div>
   {% else %}{{ empty("No backups yet.") }}{% endif %}
+</section>
+
+<section class="card" id="outreach-control">
+  <h2>Automatic recruiter outreach</h2>
+  <p class="small">JobPilot never applies to jobs for you: you open each posting and apply yourself (the browser
+    helper can fill a form, but you click Submit). Automatic recruiter emails are
+    {{ badge("on" if outreach.enabled else "off", "b-warn" if outreach.enabled else "b-none") }}
+    {% if outreach.paused %}{{ badge("paused", "b-error") }}{% endif %}
+    <span class="muted">(Settings → <code>outreach</code>)</span>.</p>
+  <div class="actions">{% if outreach.paused %}<form method="post" action="/outreach-control/resume" class="inline"><button>Resume outreach</button></form>
+    {% else %}<form method="post" action="/outreach-control/pause" class="inline"><button class="danger">Pause outreach</button></form>{% endif %}</div>
 </section>
 
 <section class="card" id="tasks">
@@ -49,14 +60,28 @@
   <b>{{ "on" if settings.scheduler_enabled else "off" }}</b>) or via the systemd user timer (<code>jobpilot scheduler systemd</code>). Nothing runs while the computer is asleep or
   off; overdue tasks run on the next pass. When offline, collection records sources as "unavailable" and expires nothing.
   Scheduled tasks never send email or submit applications.</p>
-  <table class="table compact">
-    <thead><tr><th>Task</th><th>Enabled</th><th>Every</th><th>Last success</th><th>Next run</th><th></th></tr></thead>
-    {% for name, last in sched_tasks %}{% set c = sched_cfg.tasks.get(name, {}) %}
-      <tr><td>{{ sched_labels.get(name, name) }}<div class="muted small">{{ name }}</div></td><td>{{ "yes" if c.enabled else "no" }}</td><td>{{ c.every_hours }} h</td><td>{{ last|dt }}</td>
-        <td class="small">{% if sched_next[name] %}{{ "due now" if name in sched_due else sched_next[name]|dt }}{% else %}<span class="muted">disabled</span>{% endif %}</td>
+  <table class="kv">
+    <tr><th scope="row">Scheduler</th><td>{{ badge("running", "b-ok") if sched.live else badge("not running", "b-warn") }} {{ sched.scheduler }}</td></tr>
+    <tr><th scope="row">Last pass</th><td>{% if sched.last_pass %}{{ sched.last_pass.finished_at|replace("T", " ") }} UTC ·
+      {% if sched.last_pass.ran %}ran {% for k, v in sched.last_pass.ran.items() %}{{ k }} ({{ v }}){% if not loop.last %}, {% endif %}{% endfor %}{% else %}nothing was due{% endif %}
+      <span class="muted small">({{ sched.last_pass.runner }})</span>{% else %}<span class="muted">none recorded</span>{% endif %}</td></tr>
+    <tr><th scope="row">Next pass</th><td>{% if sched.next_pass %}~{{ sched.next_pass|dt }} UTC <span class="muted small">every {{ sched.poll_seconds }} s</span>
+      {% if sched.pass_overdue %}{{ badge("overdue", "b-error") }}{% endif %}{% else %}<span class="muted">unknown — no running scheduler</span>{% endif %}</td></tr>
+  </table>
+  <p class="muted small">{{ sched.note }}</p>
+  <div class="table-wrap"><table class="table compact">
+    <thead><tr><th>Task</th><th>Enabled</th><th>Every</th><th>Last run</th><th>Last success</th><th>Next run (due)</th><th>Expected run</th><th></th></tr></thead>
+    {% for name, t in sched.tasks.items() %}
+      <tr><td>{{ t.label }}<div class="muted small">{{ name }}</div></td><td>{{ "yes" if t.enabled else "no" }}</td><td>{{ t.every_hours }} h</td>
+        <td class="small">{% if t.last_run %}{{ badge(t.last_run.status) }} {{ t.last_run.trigger }}<div class="muted">{{ t.last_run.started_at|dt }}</div>{% else %}<span class="muted">never</span>{% endif %}</td>
+        <td class="small">{{ t.last_success|dt }}</td>
+        <td class="small">{% if not t.enabled %}<span class="muted">disabled</span>{% elif t.due %}{{ badge("due", "b-warn") }} runs at the next pass{% else %}{{ t.next_due|dt }}{% endif %}
+          {% if t.retry_after_failure_at %}<div class="err-text">retrying after failure from {{ t.retry_after_failure_at|dt }}</div>{% endif %}</td>
+        <td class="small">{% if t.expected_run %}~{{ t.expected_run|dt }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td><form method="post" action="/system/tasks/{{ name }}" class="inline"><button class="small">run now</button></form></td></tr>
     {% endfor %}
-  </table>
+  </table></div>
+  <p class="muted small">All times UTC.</p>
 </section>
 
 <section class="card">

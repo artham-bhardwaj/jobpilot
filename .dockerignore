@@ -1,0 +1,17 @@
+# Allow-list: only what the image needs. Everything else (.env, data/, secrets, OAuth tokens, resumes, databases,
+# backups, logs, .venv, .git, tests, build artefacts) is never sent to the Docker build.
+*
+!pyproject.toml
+!README.md
+!src/
+!docker/entrypoint.sh
+!docker/requirements.lock
+**/__pycache__
+**/*.py[cod]
+**/.env
+**/.env.*
+**/*.db
+**/*.sqlite*
+**/secrets
+**/*token*.json
+**/*client_secret*.json

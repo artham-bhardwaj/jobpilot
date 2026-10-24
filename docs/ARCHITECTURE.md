@@ -63,9 +63,39 @@ is optional and disabled by default.
   name-based, so re-imports are idempotent and later resume versions can refresh values an import wrote while
   keeping your edits. Confirmed facts are never written by an import. `profile_imports` keeps each run's report.
 
+## Notifications and Telegram
+
+`services/notifications.py` derives events from the database on each `notify` pass (jobs above thresholds, drafts to
+review, application events, replies, due follow-ups, failed tasks and source runs), records each event key once in
+`notification_keys`, groups routine events, and stores messages in `notifications`; delivery is a separate step that
+marks a message sent only with Telegram's message id. `integrations/telegram.py` is the Bot API client (secret
+token, redacted errors, retries/429 handling, 4096-char chunking). `services/telegram_bot.py` answers read-only
+commands from the configured chat by long polling under the `telegram_poll` file lock; processed update ids and the
+offset are persisted. The poller runs as a daemon thread in `jobpilot serve` (or `jobpilot telegram poll`).
+
+## Tailored resumes
+
+`services/tailored.py` parses the registered LaTeX source of the approved Master resume losslessly, maps every line to a
+confirmed profile fact, re-orders lines by the job's skills (never rewording or adding), compiles locally (latexmk /
+pdflatex, no shell escape, timeout, temporary directory), validates the PDF against the approved resume's text, and
+stores it in `tailored_resumes` (migration 0012). `attachment_for` is the single place uploads choose a file: the job's
+valid, current tailored resume, else the application's checksum-verified approved resume. Details:
+[TAILORED_RESUMES.md](TAILORED_RESUMES.md).
+Resumes are generated only on request (job page or CLI); there is no scheduled generation.
+
+## Regions and applying
+
+`services/regions.py` tags each job `india`, `remote` (remote and open to India / the UAE), `dubai` or `other` from its
+location, work mode and title, stored in `jobs.regions` (migration 0013) and set on every ingest. The Jobs page filters
+by it (region tabs) and the dashboard groups top matches by it. Board sources accept `"regions"` next to
+`location_keywords`; `sources/remote.py` adds the Himalayas and Jobicy remote boards, and
+`services/regional_sources.py` holds the recommended India / remote / Dubai source presets. JobPilot never submits
+applications: the autopilot service, its scheduler task and Telegram batch approvals were removed on 2026-10-23
+(the `submission_batches` table is kept for history).
+
 ## Data locations (all under `JOBPILOT_DATA_DIR`, default `./data`, git-ignored)
 
-`jobpilot.db` · `files/` (resumes, evidence) · `backups/` · `logs/jobpilot.log` ·
+`jobpilot.db` · `files/` (resumes, evidence, `templates/` resume source, `tailored_resumes/`) · `backups/` · `logs/jobpilot.log` ·
 `secrets/` (OAuth token, 0700) · `browser_profile/` · `locks/`
 
 ## Build order deviations (dependency-driven)
@@ -87,3 +117,8 @@ is optional and disabled by default.
 | 0006 | pipeline, sources, matching, preparation |
 | 0007 | certifications, achievements, project kinds, role types, preferences |
 | 0008 | information hub: `profile_imports`, `profile_claims` |
+| 0009 | Gmail synchronisation state on `email_drafts` |
+| 0010 | notifications: `notifications`, `notification_keys`, `telegram_updates`, `integration_state` |
+| 0011 | autopilot submission batches (historical: auto-apply was removed); `notifications.reply_markup` |
+| 0012 | `tailored_resumes`: job-specific PDFs from the Master resume's LaTeX source |
+| 0013 | `jobs.regions` (`,india,remote,dubai,` tags; existing jobs back-filled) |

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import re
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
@@ -20,7 +22,35 @@ from jobpilot.services.profile import EMAIL_PATTERN
 from jobpilot.services.text_utils import normalize
 
 BASE_CONFIDENCE = {"job_posting": 0.8, "company_website": 0.75, "email_thread": 0.9, "referral": 0.7,
-                   "public_profile": 0.6, "manual": 0.5}
+                   "public_profile": 0.6, "manual": 0.5, "linkedin_manual": 0.6, "apollo_manual": 0.6, "apollo_api": 0.6}
+SOURCE_TYPES = ("job_posting", "company_website", "public_profile", "email_thread", "referral", "manual",
+                "linkedin_manual", "apollo_manual", "apollo_api")
+# verified: you confirmed it (they replied from it / it's on the company site); apollo_reported: Apollo says its check
+# passed, JobPilot did not confirm it; unverified / guessed: as named; bounced: mail to it came back.
+EMAIL_STATUSES = ("verified", "apollo_reported", "unverified", "guessed", "bounced")
+PERSONAL_DOMAINS = {"gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in", "outlook.com", "hotmail.com", "live.com",
+                    "icloud.com", "me.com", "proton.me", "protonmail.com", "rediffmail.com", "aol.com", "gmx.com",
+                    "zoho.com", "yandex.com"}
+
+
+def email_domain(email: str | None) -> str:
+    return (email or "").rsplit("@", 1)[-1].lower() if email and "@" in email else ""
+
+
+def domain_warning(contact: Contact) -> str | None:
+    """A visible warning when the email's domain doesn't fit the contact's company (never changed silently)."""
+    dom = email_domain(contact.email)
+    if not dom:
+        return None
+    if dom in PERSONAL_DOMAINS:
+        return f"{dom} is a personal email domain, not a work address"
+    company = (contact.company.name if contact.company else "") or ""
+    tokens = [t for t in re.split(r"[^a-z0-9]+", company.lower()) if len(t) >= 3 and t not in
+              {"inc", "ltd", "llc", "corp", "corporation", "limited", "private", "pvt", "the", "technologies", "services",
+               "solutions", "group", "company", "india", "global"}]
+    if tokens and not any(t in dom.replace("-", "") for t in tokens):
+        return f"email domain {dom} does not mention {company!r}; check it belongs to this company"
+    return None
 
 
 class ContactIn(BaseModel):
@@ -31,10 +61,11 @@ class ContactIn(BaseModel):
     job_id: int | None = None
     role_type: Literal["recruiter", "hiring_manager", "referral", "engineer", "other"] = "recruiter"
     email: str | None = Field(default=None, max_length=320, pattern=EMAIL_PATTERN)
-    email_status: Literal["verified", "unverified", "guessed"] | None = None
+    email_status: Literal["verified", "apollo_reported", "unverified", "guessed", "bounced"] | None = None
     linkedin_url: HttpUrl | None = None
     phone: str | None = Field(default=None, max_length=50)
-    source_type: Literal["job_posting", "company_website", "public_profile", "email_thread", "referral", "manual"] = "manual"
+    source_type: Literal["job_posting", "company_website", "public_profile", "email_thread", "referral", "manual",
+                         "linkedin_manual", "apollo_manual", "apollo_api"] = "manual"
     source_url: HttpUrl | None = None
     source_note: str | None = Field(default=None, max_length=2000)
     relationship_note: str | None = Field(default=None, max_length=2000)
@@ -65,8 +96,12 @@ def _confidence(c: Contact) -> float:
     base = BASE_CONFIDENCE.get(c.source_type, 0.5)
     if c.email_status == "verified":
         return 1.0
+    if c.email_status == "bounced":
+        return 0.0
     if c.email_status == "guessed":
         return min(base, 0.2)
+    if c.email_status == "apollo_reported":
+        base = min(1.0, base + 0.15)  # a third-party check passed; still not confirmed by you
     if c.source_url:
         base = min(1.0, base + 0.05)
     return round(base, 2)
@@ -235,6 +270,8 @@ def is_blocked(session: Session, email: str | None, company_id: int | None = Non
                 (DoNotContact.kind == "domain") & (DoNotContact.value == domain))))
         if row:
             return f"{row.kind} {row.value} is on the do-not-contact list"
+        if session.scalar(select(Contact.id).where(func.lower(Contact.email) == e, Contact.email_status == "bounced")):
+            return f"mail to {e} bounced earlier"
     if company_id:
         company = session.get(Company, company_id)
         if company:
@@ -243,6 +280,17 @@ def is_blocked(session: Session, email: str | None, company_id: int | None = Non
             if row:
                 return f"company {company.name} is on the do-not-contact list"
     return None
+
+
+def record_bounce(session: Session, contact: Contact, evidence: str) -> None:
+    """Mail to this address came back: it is marked bounced (blocked for all outreach) and pending follow-ups stop."""
+    if contact.email_status == "bounced":
+        return
+    contact.email_status, contact.verified_at = "bounced", None
+    contact.confidence = _confidence(contact)
+    contact.verification_note = ((contact.verification_note or "") + f"\nBounced: {evidence}").strip()[:2000]
+    _suppress_followups_for(session, contact)
+    audit.record(session, "contact.email_bounced", "contact", contact.id)
 
 
 def log_interaction(session: Session, contact: Contact, channel: str, direction: str, summary: str,
@@ -288,6 +336,35 @@ def link_contact_job(session: Session, contact: Contact, job: Job, relation: str
     session.flush()
     audit.record(session, "contact.linked_job", "contact", contact.id, job_id=job.id, source=source[:80])
     return link
+
+
+def delete_contact(session: Session, contact: Contact, reason: str) -> dict:
+    """Remove a contact that should never have existed (e.g. a test placeholder).
+
+    Refused when any email draft or logged interaction refers to it — those keep their history; correct the contact
+    instead. The audit entry records what was removed and why, so the history stays readable after the row is gone.
+    """
+    from jobpilot.models import ContactJob, EmailDraft
+
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValueError("Say why the contact is being removed (e.g. 'test placeholder')")
+    drafts = session.scalar(select(func.count(EmailDraft.id)).where(EmailDraft.contact_id == contact.id)) or 0
+    talks = session.scalar(select(func.count(ContactInteraction.id)).where(ContactInteraction.contact_id == contact.id)) or 0
+    if drafts or talks:
+        raise ValueError(f"{contact.display_name} has {drafts} email draft(s) and {talks} interaction(s); keep it "
+                         "(edit it, or mark it do-not-contact) so that history stays linked")
+    jobs = [link.job_id for link in session.scalars(select(ContactJob).where(ContactJob.contact_id == contact.id))]
+    snapshot = {"name": contact.name, "title": contact.title, "company": contact.company.name if contact.company else None,
+                "email": contact.email, "linkedin_url": contact.linkedin_url, "source_type": contact.source_type,
+                "jobs": jobs}
+    for link in session.scalars(select(ContactJob).where(ContactJob.contact_id == contact.id)):
+        session.delete(link)
+    cid = contact.id
+    session.delete(contact)
+    session.flush()
+    audit.record(session, "contact.deleted", "contact", cid, reason=reason[:300], removed=snapshot)
+    return {"removed": cid, **snapshot}
 
 
 def unlink_contact_job(session: Session, contact: Contact, job: Job) -> None:

@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from jobpilot.config import Settings
 from jobpilot.models import Company, Job, JobSighting, JobSource, SourceRun, utcnow
-from jobpilot.services import audit, job_parser, settings_store
+from jobpilot.services import audit, job_parser, regions, settings_store
 from jobpilot.services.text_utils import normalize_company, normalize_location, normalize_title, safe_url, sha256
 from jobpilot.sources import ADAPTERS
 from jobpilot.sources.base import JobData
@@ -94,6 +94,7 @@ def _apply_data(job: Job, data: JobData) -> None:
     job.source_url = data.source_url or job.source_url
     job.apply_url = data.apply_url or job.apply_url
     job.remote_type = data.remote_type or parsed.remote_type
+    job.regions = regions.tags(job.location, job.remote_type, job.title)
     job.experience_min_years = parsed.experience_min_years
     job.experience_max_years = parsed.experience_max_years
     job.experience_level = parsed.experience_level
@@ -158,6 +159,13 @@ def find_existing(session: Session, source: JobSource | None, data: JobData) -> 
         job = session.scalar(select(Job).where(Job.apply_url_canonical.in_(canon)).order_by(Job.id.desc()))
         if job:
             return job, "application_url"
+    if data.external_id and data.company_name:
+        # The same requisition id at the same company is the same vacancy, whichever site it was seen on
+        # (e.g. a careers site and its Workday board spell the location differently, so fingerprints differ).
+        company = normalize_company(data.company_name)
+        for job in session.scalars(select(Job).where(Job.external_id == data.external_id).order_by(Job.id)):
+            if company and normalize_company(job.company_name) == company:
+                return job, "requisition_id"
     fp = fingerprint(data.company_name, data.title, data.location)
     q = select(Job).where(Job.fingerprint == fp, Job.status == "active")
     if source is not None and data.external_id:
@@ -421,6 +429,7 @@ def run_source(session: Session, http: PoliteHttp, source: JobSource, *, dry_run
             source.last_run_at, source.last_status, source.last_error = run.started_at, "failed", run.error
             return {"status": "failed", "run_id": run.id, "errors": [run.error], "job_ids": [], "dry_run": dry_run}
         stats["errors"] = result.errors
+        stats["notes"], stats["counts"] = result.notes, result.counts
         if dry_run:
             sp.rollback()
         else:
@@ -435,7 +444,7 @@ def run_source(session: Session, http: PoliteHttp, source: JobSource, *, dry_run
         else:
             run.status = "success"
         run.error = "\n".join(result.errors)[:2000] or None
-        run.warnings = [stats["anomaly"]] if stats.get("anomaly") else None
+        run.warnings = ([stats["anomaly"]] if stats.get("anomaly") else []) + list(result.notes) or None
         for key in ("fetched", "new", "updated", "unchanged", "expired", "missing"):
             setattr(run, key, stats.get(key, 0))
         run.duplicates, run.reposts = stats.get("duplicate", 0), stats.get("repost", 0)
@@ -584,7 +593,9 @@ SORTS = {
 def search(session: Session, *, q: str | None = None, status: str | None = "active", category: str | None = None,
            eligibility: str | None = None, remote: str | None = None, user_status: str | None = None,
            min_score: float | None = None, source_id: int | None = None, posted_within_days: int | None = None,
-           sort: str = "relevance", limit: int = 100, offset: int = 0) -> tuple[list[Job], int]:
+           region: str | None = None, applied: str | None = None, sort: str = "relevance", limit: int = 100,
+           offset: int = 0) -> tuple[list[Job], int]:
+    """``applied``: "yes" = only jobs you've recorded as applied, "no" = only jobs you haven't."""
     from sqlalchemy import func
 
     stmt = select(Job)
@@ -600,6 +611,8 @@ def search(session: Session, *, q: str | None = None, status: str | None = "acti
         stmt = stmt.where(Job.eligibility == eligibility)
     if remote:
         stmt = stmt.where(Job.remote_type == remote)
+    if region in (*regions.REGIONS, "other"):
+        stmt = stmt.where(Job.regions.like(f"%,{region},%"))
     if user_status:
         stmt = stmt.where(Job.user_status == user_status)
     else:
@@ -611,6 +624,11 @@ def search(session: Session, *, q: str | None = None, status: str | None = "acti
     if posted_within_days:
         cutoff = utcnow() - timedelta(days=posted_within_days)
         stmt = stmt.where(or_(Job.posted_at >= cutoff, (Job.posted_at.is_(None)) & (Job.first_seen_at >= cutoff)))
+    if applied in ("yes", "no"):
+        from jobpilot.models import Application
+
+        applied_ids = select(Application.job_id).where(Application.applied_at.is_not(None))
+        stmt = stmt.where(Job.id.in_(applied_ids) if applied == "yes" else Job.id.not_in(applied_ids))
     total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     stmt = stmt.order_by(*SORTS.get(sort, SORTS["relevance"])).limit(limit).offset(offset)
     return list(session.scalars(stmt)), total

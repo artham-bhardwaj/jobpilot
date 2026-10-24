@@ -18,6 +18,22 @@ from jobpilot.services.text_utils import html_to_text
 from jobpilot.sources.base import FetchResult, JobData, parse_deadline, parse_dt
 from jobpilot.sources.http import PoliteHttp
 
+# Optional keys on every board source: "title_keywords", "location_keywords", "regions" (india / remote / dubai),
+# "exclude_keywords" (keep only matching postings; a location keyword OR a region is enough). The board is still read in full, so postings that leave it are still counted missing.
+_FILTER_HELP = ', "title_keywords": ["software engineer"], "regions": ["india", "remote", "dubai"]'
+
+
+def _filters(config: dict) -> dict:
+    from jobpilot.sources.careers import filter_config
+
+    return filter_config(config)
+
+
+def _filtered(result: FetchResult, config: dict) -> FetchResult:
+    from jobpilot.sources.careers import apply_filters
+
+    return apply_filters(result, _filters(config))
+
 _TOKEN = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 
 
@@ -31,13 +47,22 @@ def _token(config: dict, key: str) -> str:
 class GreenhouseAdapter:
     kind = "greenhouse"
     label = "Greenhouse job board"
-    config_help = '{"board_token": "examplecompany"}  — from boards.greenhouse.io/<board_token>'
+    config_help = '{"board_token": "examplecompany"' + _FILTER_HELP + '}  — from boards.greenhouse.io/<board_token>'
     BASE = "https://boards-api.greenhouse.io/v1/boards"
+    EMBED = "https://job-boards.greenhouse.io/embed/job_app"
 
     def validate_config(self, config: dict) -> dict:
-        return {"board_token": _token(config, "board_token")}
+        return {"board_token": _token(config, "board_token"), **_filters(config)}
 
-    def _item(self, j: dict, company_name: str | None) -> JobData:
+    def form_url(self, token: str, job_id, absolute_url: str | None) -> str | None:
+        """Greenhouse's own application form for a posting. Boards that show jobs on the company's site
+        (``absolute_url`` like ``https://www.example.com/careers?gh_jid=1``) embed this same form there."""
+        host = (absolute_url or "").split("/")[2].lower() if (absolute_url or "").count("/") >= 2 else ""
+        if host.endswith("greenhouse.io") or job_id is None:
+            return absolute_url
+        return f"{self.EMBED}?for={token}&token={int(job_id)}"
+
+    def _item(self, j: dict, company_name: str | None, token: str | None = None) -> JobData:
         content = html.unescape(j.get("content") or "")
         loc = (j.get("location") or {}).get("name")
         depts = ", ".join(d.get("name", "") for d in j.get("departments") or [] if d.get("name"))
@@ -59,34 +84,66 @@ class GreenhouseAdapter:
             posted_at=posted,
             valid_through=deadline,
             source_url=j.get("absolute_url"),
-            apply_url=j.get("absolute_url"),
+            apply_url=self.form_url(token, j.get("id"), j.get("absolute_url")) if token else j.get("absolute_url"),
             external_id=str(j.get("id")) if j.get("id") is not None else None,
             department=depts or None,
             raw=raw,
         )
 
+    MAX_DETAILS = 60  # with keyword filters: postings read one by one after filtering the light listing
+
     def fetch(self, http: PoliteHttp, config: dict, company_name: str | None) -> FetchResult:
-        token = self.validate_config(config)["board_token"]
+        cfg = self.validate_config(config)
+        token = cfg["board_token"]
+        if _filters(config):
+            return self._fetch_filtered(http, token, config, company_name)
         data = http.get_json(f"{self.BASE}/{token}/jobs", params={"content": "true"})
         jobs = data.get("jobs") if isinstance(data, dict) else None
         if jobs is None:
             return FetchResult(errors=["Unexpected Greenhouse response shape"])
-        return FetchResult(items=[self._item(j, company_name) for j in jobs if j.get("title")], full_snapshot=True)
+        return _filtered(FetchResult(items=[self._item(j, company_name, token) for j in jobs if j.get("title")],
+                                     full_snapshot=True), config)
+
+    def _fetch_filtered(self, http: PoliteHttp, token: str, config: dict, company_name: str | None) -> FetchResult:
+        """Large boards (Stripe, Databricks: over 5 MB with descriptions): filter the listing without descriptions,
+        then read only the matching postings. The listing is still complete, so it remains a full snapshot."""
+        from jobpilot.sources.careers import keep_posting
+
+        data = http.get_json(f"{self.BASE}/{token}/jobs")
+        jobs = data.get("jobs") if isinstance(data, dict) else None
+        if jobs is None:
+            return FetchResult(errors=["Unexpected Greenhouse response shape"])
+        cfg = _filters(config)
+        wanted = [j for j in jobs if j.get("title") and j.get("id") is not None
+                  and keep_posting(cfg, j["title"], (j.get("location") or {}).get("name"))]
+        items, errors = [], []
+        for j in wanted[:self.MAX_DETAILS]:
+            try:
+                items.append(self.fetch_one(http, token, str(j["id"]), company_name))
+            except Exception as exc:  # one posting failing must not drop the others
+                errors.append(f"posting {j['id']}: {exc}"[:300])
+        if len(wanted) > self.MAX_DETAILS:
+            errors.append(f"{len(wanted)} postings matched; read the first {self.MAX_DETAILS} (narrow the keywords)")
+        res = FetchResult(items=items, full_snapshot=not errors, errors=errors)
+        res.counts = {"listed": len(jobs), "matched": len(wanted), "read": len(items)}
+        res.notes.append(f"board lists {len(jobs)} posting(s); {len(wanted)} matched your keywords; read {len(items)}")
+        return res
 
     def fetch_one(self, http: PoliteHttp, token: str, job_id: str, company_name: str | None) -> JobData:
-        j = http.get_json(f"{self.BASE}/{_token({'t': token}, 't')}/jobs/{int(job_id)}")
-        return self._item(j, company_name)
+        token = _token({'t': token}, 't')
+        j = http.get_json(f"{self.BASE}/{token}/jobs/{int(job_id)}")
+        return self._item(j, company_name, token)
 
 
 class LeverAdapter:
     kind = "lever"
     label = "Lever job board"
-    config_help = '{"site": "examplecompany"}  — from jobs.lever.co/<site>'
+    config_help = '{"site": "examplecompany"' + _FILTER_HELP + '}  — from jobs.lever.co/<site>'
     BASE = "https://api.lever.co/v0/postings"
     MAX_POSTINGS = 2200
 
     def validate_config(self, config: dict) -> dict:
-        return {"site": _token(config, "site")}
+        return {"site": _token(config, "site"), **_filters(config)}
 
     def _item(self, p: dict, company_name: str | None) -> JobData:
         cats = p.get("categories") or {}
@@ -129,12 +186,12 @@ class LeverAdapter:
                 return FetchResult(items=items, errors=["Unexpected Lever response shape"])
             items.extend(self._item(p, company_name) for p in data if p.get("text"))
             if len(data) < limit:
-                return FetchResult(items=items, full_snapshot=True)
+                return _filtered(FetchResult(items=items, full_snapshot=True), config)
             skip += limit
             if skip >= self.MAX_POSTINGS:
                 # Not a full listing: postings past the cap must not count as "missing" (they'd be expired).
-                return FetchResult(items=items, errors=[f"Stopped after {skip} postings (page limit); listing is "
-                                                        "incomplete, so nothing was expired"])
+                return _filtered(FetchResult(items=items, errors=[f"Stopped after {skip} postings (page limit); "
+                                                                  "listing is incomplete, so nothing was expired"]), config)
 
     def fetch_one(self, http: PoliteHttp, site: str, posting_id: str, company_name: str | None) -> JobData:
         if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", posting_id):
@@ -146,11 +203,11 @@ class LeverAdapter:
 class AshbyAdapter:
     kind = "ashby"
     label = "Ashby job board"
-    config_help = '{"board": "examplecompany"}  — from jobs.ashbyhq.com/<board>'
+    config_help = '{"board": "examplecompany"' + _FILTER_HELP + '}  — from jobs.ashbyhq.com/<board>'
     BASE = "https://api.ashbyhq.com/posting-api/job-board"
 
     def validate_config(self, config: dict) -> dict:
-        return {"board": _token(config, "board")}
+        return {"board": _token(config, "board"), **_filters(config)}
 
     def fetch(self, http: PoliteHttp, config: dict, company_name: str | None) -> FetchResult:
         board = self.validate_config(config)["board"]
@@ -180,4 +237,4 @@ class AshbyAdapter:
                 department=j.get("department") or j.get("team"),
                 raw={"id": j.get("id"), "compensation": (j.get("compensation") or {}).get("compensationTierSummary")},
             ))
-        return FetchResult(items=items, full_snapshot=True)
+        return _filtered(FetchResult(items=items, full_snapshot=True), config)

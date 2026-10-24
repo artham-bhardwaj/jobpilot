@@ -1,5 +1,7 @@
 # JobPilot
 
+> **Using it day to day? Start with [howtouse.md](howtouse.md).**
+
 A local-first job search and application manager. It collects jobs from sources you configure,
 scores them against your **verified** profile, picks the right approved resume, helps you prepare
 applications and recruiter outreach, tracks interviews, and reports results.
@@ -7,6 +9,14 @@ applications and recruiter outreach, tracks interviews, and reports results.
 - Runs entirely on your machine (FastAPI + SQLite). No paid services, no AI APIs, no API keys.
 - Never invents facts: only information you confirm is used in scores, resumes, emails and forms.
 - Never submits applications or sends email on its own. Every consequential step waits for you.
+- Optional: Gmail drafts/sending/reply detection ([docs/GMAIL_SETUP.md](docs/GMAIL_SETUP.md)) and Telegram
+  notifications plus read-only commands ([docs/TELEGRAM.md](docs/TELEGRAM.md)), both free.
+- Finds jobs in India, remote jobs open to India or the UAE, and jobs in Dubai / UAE, with region tabs on the Jobs page
+  and a region overview on the dashboard ([howtouse.md](howtouse.md) §9). It never applies to jobs for you.
+- Tailored resumes for any job, made only when you ask on the job's page
+  ([docs/TAILORED_RESUMES.md](docs/TAILORED_RESUMES.md)).
+- Optional Docker image for future hosting ([docs/DOCKER.md](docs/DOCKER.md)); the native install stays the
+  recommended way to run it on your laptop.
 
 > JobPilot only sees jobs from the sources you add (company boards, career pages, imports).
 > It does not and cannot cover the whole internet.
@@ -110,7 +120,8 @@ jobpilot hub report [--id N] | hub link-docs --project NAME --path DIR
 jobpilot export jobs|applications|contacts|drafts|interviews|summary|all-json [--out FILE]
 jobpilot delete-data profile|contacts|outreach|everything [--include-backups]
 jobpilot scheduler run-due|status|run --task NAME|systemd [--out DIR]
-jobpilot gmail auth|status|sync|revoke    # optional, see docs/GMAIL_SETUP.md
+jobpilot gmail auth|status|check|sync|test-draft|create-draft|draft-status|inspect   # docs/GMAIL_SETUP.md
+jobpilot telegram status|check|find-chat|set-chat ID|test|notify [--dry-run]|summary|poll  # docs/TELEGRAM.md
 jobpilot db upgrade|current
 jobpilot doctor                           # read-only diagnostics: paths, schema, server, health, integrity
 jobpilot --debug <command>                # show a full traceback if something fails
@@ -121,7 +132,7 @@ jobpilot --debug <command>                # show a full traceback if something f
 ## Tests
 
 ```bash
-.venv/bin/pytest            # 439 tests, offline (fake HTTP, fake DNS), synthetic fixtures only (~6 min)
+.venv/bin/pytest            # 566 tests, offline (fake HTTP, fake DNS), synthetic fixtures only (~6 min)
 ```
 
 A few tests drive your local Chrome headlessly (PDF rendering, form-fill safety); they are skipped
@@ -131,11 +142,12 @@ job boards, Gmail or employer forms behave the same way. See `IMPLEMENTATION_STA
 ## Optional scheduling
 
 Scheduled tasks (collect jobs, expiry check, score updates, deadline/application reminders, follow-up check,
-backup, health check, Gmail reply sync) are **off** by default. Enable each in **Settings → scheduler**, then either:
+backup, health check, Gmail reply sync, Telegram notifications) are **off** by default. The `notify` task may run
+every 5 minutes or more; tasks that contact job sites or Gmail run at most hourly. Enable each in **Settings → scheduler**, then either:
 
 - set `JOBPILOT_SCHEDULER_ENABLED=true` so `jobpilot serve` runs them while it is open, or
-- install the systemd user timer (runs while you're logged in; `Persistent=true` catches up after
-  the machine was off):
+- install the systemd user timer (runs while you're logged in; each pass runs whatever is overdue, so missed
+  work is caught up on the next pass after the machine wakes):
 
   ```bash
   .venv/bin/jobpilot scheduler systemd --out deploy/systemd
@@ -143,11 +155,55 @@ backup, health check, Gmail reply sync) are **off** by default. Enable each in *
   systemctl --user daemon-reload && systemctl --user enable --now jobpilot-scheduler.timer
   ```
 
+Check it with `jobpilot scheduler status` (or **System → Scheduled tasks**): whether a scheduler is running, the last
+pass and what it ran (empty passes are recorded too), the expected next pass, and per task the last run (manual or
+scheduled, success or failure), last success, next due time and the pass expected to run it. A due task runs at the
+next pass (every `JOBPILOT_SCHEDULER_POLL_SECONDS`, default 300 s), not at the exact moment it becomes due. A scheduled
+collection in which every source failed is recorded as **failed** (and retried with backoff), never as an empty
+success. Backups are verified before they are kept, and retention never removes the last valid backup.
+
 Overlapping runs are prevented with per-task file locks. Running both the in-process scheduler and the timer is
 safe (the locks stop a task from running twice), but one of them is enough. Nothing runs while the laptop sleeps;
 due tasks run on the next pass after it wakes, once each (reminders are raised once per fact, so catching up never
 duplicates them). A failed task backs off (15 min, 30 min, 1 h, …) instead of retrying on every pass.
 Scheduled tasks never send email or submit applications.
+
+**Laptop off = paused.** JobPilot runs only on your laptop. While it is asleep, shut down, or JobPilot isn't running,
+nothing is collected, checked or notified. When it runs again, each overdue task runs once (not once per missed
+interval), and Telegram commands sent meanwhile are answered (Telegram keeps them for about a day).
+
+## Job sources (what is actually monitored)
+
+Only the sources you add on **Sources** are fetched, nothing else:
+
+| Type | What it reads | Config |
+|---|---|---|
+| `greenhouse` | a company's public Greenhouse board API (`boards-api.greenhouse.io`) | `{"board_token": "<company>"}` |
+| `lever` | a company's public Lever postings API | `{"site": "<company>"}` |
+| `ashby` | a company's public Ashby job board API | `{"board": "<company>"}` (from `jobs.ashbyhq.com/<board>`) |
+| `jsonld` | individual job pages that publish schema.org `JobPosting` data | `{"urls": ["https://…", …]}` (max 50) |
+| `sitemap` | job pages listed in a career site's own sitemap (the one its robots.txt names), filtered by keywords in the URL, read for schema.org `JobPosting` data; works for Workday career sites | `{"sitemap_url": "https://<tenant>.wd5.myworkdayjobs.com/<site>/siteMap.xml", "title_keywords": [...], "location_keywords": [...], "exclude_keywords": [...], "max_pages": 25}` |
+| manual | URLs you paste, CSV/JSON imports, typed-in jobs | Jobs → Add |
+
+Configured target companies (checked 2026-10-17; see each source's note on **Sources**):
+
+| Company | Official careers site uses | Source |
+|---|---|---|
+| Visa | Workday `visa.wd5.myworkdayjobs.com/Visa` | `sitemap` |
+| Mastercard | Phenom site + Workday `mastercard.wd1.myworkdayjobs.com/CorporateCareers` | `sitemap` |
+| Adobe | Phenom site + Workday `adobe.wd5.myworkdayjobs.com/external_experienced` | `sitemap` |
+| Atlassian | iCIMS | not supported |
+| JPMorgan Chase | Oracle Cloud HCM (script-rendered) | not supported |
+| Google, Microsoft, Amazon | their own career systems | not supported |
+
+Workday sitemaps list about 100 postings each (the newest), not every opening, so a sitemap source sees a recent
+slice of each company's jobs; jobs that drop out of the sitemap are never expired because of it. Job pages are read
+only when the URL matches your keywords (at most `max_pages` per run).
+
+Requests are rate-limited per host, respect robots.txt, and retry within bounds. A source that fails is reported
+(System, Telegram) without touching existing jobs. A job is *active* while the last successful run of its source
+still lists it: that is "still listed", not proof the vacancy is open. Live-tested: Greenhouse (Milestone 10) and `sitemap` on the Visa, Mastercard and Adobe
+Workday sites (Milestone 15); Lever, Ashby and `jsonld` are tested against recorded responses.
 
 ## Safe start and stop
 

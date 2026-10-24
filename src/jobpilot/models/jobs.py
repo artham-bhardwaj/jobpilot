@@ -55,6 +55,8 @@ class Job(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(300))
     location: Mapped[str | None] = mapped_column(String(300))
     remote_type: Mapped[str] = mapped_column(String(20), default="unknown")  # remote|hybrid|onsite|unknown
+    # Regions as ",india,remote," (services/regions.py): india, remote (open to you), dubai, or other.
+    regions: Mapped[str | None] = mapped_column(String(40), index=True)
     employment_type: Mapped[str | None] = mapped_column(String(50))
     department: Mapped[str | None] = mapped_column(String(200))
     experience_level: Mapped[str | None] = mapped_column(String(20))  # entry|mid|senior|None

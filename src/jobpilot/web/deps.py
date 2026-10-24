@@ -51,6 +51,15 @@ templates.env.filters["nl2br"] = _nl2br
 templates.env.filters["pct"] = _pct
 
 
+def _region_badges(job) -> Markup:
+    from jobpilot.services import regions
+
+    return Markup(" ".join(f'<span class="badge r-{r}">{escape(regions.LABELS[r])}</span>' for r in regions.of(job)))
+
+
+templates.env.filters["region_badges"] = _region_badges
+
+
 def get_or_404(db: Session, model: type, obj_id: int, label: str | None = None):
     """Load a record by primary key or raise a 404 with a readable message."""
     obj = db.get(model, obj_id)

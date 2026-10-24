@@ -47,6 +47,9 @@ class FetchResult:
     gone_urls: list[str] = field(default_factory=list)
     # How many of ``errors`` were temporary (network, 429, 5xx) rather than definitive.
     temporary_failures: int = 0
+    # Informational facts about the run (e.g. how many sitemap postings matched); not errors.
+    notes: list[str] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
 
 
 class SourceAdapter(Protocol):

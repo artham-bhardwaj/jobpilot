@@ -16,6 +16,7 @@ import logging
 import re
 import zipfile
 from html import escape
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -485,3 +486,29 @@ def select_for_job(session: Session, job: Job) -> dict[str, Any]:
             "reason": "; ".join(reasons), "reasons": reasons, "warnings": warnings,
             "coverage": {"required": req_cov, "preferred": pref_cov}, "not_in_resume": not_in_resume,
             "alternatives": sorted(alts, key=lambda a: -a["coverage"])}
+
+
+class ResumeFileError(ValueError):
+    """The selected resume version's stored file is missing, not approved, or not the bytes that were approved."""
+
+
+def verified_file(settings: Settings, version: ResumeVersion | None) -> Path:
+    """Path of ``version``'s stored file, only if it is approved and its bytes still match the recorded checksum.
+
+    Every upload (browser forms, Gmail attachments) must be exactly the approved version: a replaced or corrupted file
+    is refused, never attached."""
+    import hashlib
+
+    if version is None or not version.file_path:
+        raise ResumeFileError("no resume file is selected for this application")
+    if version.status != "approved":
+        raise ResumeFileError(f"resume version {version.version_no} is not approved")
+    try:
+        path = storage.resolve(settings, version.file_path)
+    except storage.StorageError as exc:
+        raise ResumeFileError(f"resume file unavailable: {exc}") from exc
+    if not path.is_file():
+        raise ResumeFileError("resume file is missing from storage")
+    if version.sha256 and hashlib.sha256(path.read_bytes()).hexdigest() != version.sha256:
+        raise ResumeFileError("resume file does not match the approved version's checksum; not attaching it")
+    return path

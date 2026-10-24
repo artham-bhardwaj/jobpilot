@@ -22,7 +22,22 @@ router = APIRouter()
 
 @router.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
-    return render(request, "dashboard.html", stats=overview.stats(db))
+    from jobpilot.services import regions
+
+    return render(request, "dashboard.html", stats=overview.stats(db),
+                  system=overview.system_status(db, request.app.state.settings), by_region=regions.overview(db),
+                  ready=_ready_to_apply(db))
+
+
+def _ready_to_apply(db: Session, limit: int = 8) -> dict:
+    """Best active jobs you haven't applied to yet: relevant, not ineligible, not dismissed."""
+    from jobpilot.services import jobs as job_svc
+    from jobpilot.services import settings_store
+
+    threshold = settings_store.get(db, "matching")["relevance_threshold"]
+    rows, total = job_svc.search(db, applied="no", min_score=threshold, sort="relevance", limit=limit * 3)
+    rows = [j for j in rows if j.eligibility != "ineligible" and not j.hard_conflict][:limit]
+    return {"jobs": rows, "total": total, "threshold": threshold}
 
 
 @router.get("/health")
@@ -43,11 +58,26 @@ def system_page(request: Request, level: str | None = None, db: Session = Depend
         runs=runs,
         audit_entries=audit.recent(db, limit=100),
         backups=backup.list_backups(settings),
-        sched_tasks=[(n, scheduler.last_success(db, n)) for n in scheduler.TASKS],
-        sched_due=scheduler.due_tasks(db),
-        sched_next=scheduler.next_runs(db), sched_labels=scheduler.TASK_LABELS,
-        sched_cfg=settings_store.get(db, "scheduler"),
+        sched=scheduler.status_report(db, settings),
+        outreach={"enabled": settings_store.get(db, "outreach")["auto_enabled"], "paused": _outreach_paused(db)},
     )
+
+
+def _outreach_paused(db: Session) -> bool:
+    from jobpilot.services import outreach_auto
+
+    return outreach_auto.is_paused(db)
+
+
+@router.post("/outreach-control/{action}")
+def outreach_control(action: str, db: Session = Depends(get_db)):
+    from jobpilot.services import outreach_auto
+
+    if action not in ("pause", "resume"):
+        return redirect("/system#outreach-control", err="Unknown action")
+    outreach_auto.set_paused(db, action == "pause", "dashboard")
+    return redirect("/system#outreach-control", msg="Automatic outreach paused" if action == "pause"
+                    else "Automatic outreach resumed (it runs only when turned on in Settings)")
 
 
 @router.post("/system/tasks/{name}")

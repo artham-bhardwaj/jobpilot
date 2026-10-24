@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, UploadFile
 from pydantic import ValidationError
@@ -41,15 +42,29 @@ def explorer(request: Request, db: Session = Depends(get_db)):
         "min_score": _int(qp.get("min_score")),
         "source_id": _int(qp.get("source_id")),
         "posted_within_days": _int(qp.get("posted_within_days")),
+        "region": qp.get("region") or None,
+        "applied": qp.get("applied") if qp.get("applied") in ("yes", "no") else None,
         "sort": qp.get("sort", "relevance"),
     }
     page = max(1, _int(qp.get("page"), 1))
     jobs, total = job_svc.search(db, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE, **filters)
     sources = list(db.scalars(select(JobSource).order_by(JobSource.name)))
-    base_qs = "&".join(f"{k}={v}" for k, v in qp.items() if k != "page")
+    from urllib.parse import urlencode
+
+    from jobpilot.models import Application
+
+    ids = [j.id for j in jobs]
+    app_by_job = {a.job_id: a for a in db.scalars(select(Application).where(Application.job_id.in_(ids)))} if ids else {}
+
+    from jobpilot.services import regions
+
+    base_qs = urlencode([(k, v) for k, v in qp.items() if k != "page"])
+    # Region tabs keep every other filter.
+    tab_qs = urlencode([(k, v) for k, v in qp.items() if k not in ("page", "region")])
     return render(request, "jobs.html", jobs=jobs, total=total, page=page, pages=(total + PAGE_SIZE - 1) // PAGE_SIZE,
                   filters=filters, categories=settings_store.get(db, "role_categories"), sources=sources,
-                  base_qs=base_qs, threshold=settings_store.get(db, "matching")["relevance_threshold"])
+                  base_qs=base_qs, tab_qs=tab_qs, app_by_job=app_by_job, region_counts=regions.counts(db, filters["status"] or ""),
+                  threshold=settings_store.get(db, "matching")["relevance_threshold"])
 
 
 @router.get("/jobs/new")
@@ -108,8 +123,53 @@ def job_detail(job_id: int, request: Request, db: Session = Depends(get_db)):
     job = get_or_404(db, Job, job_id)  # read-only: unscored jobs show a "Re-score" prompt instead
     selection = rs.select_for_job(db, job)
     extra = _job_extras(db, job)
+    from jobpilot.services import tailored
+
     return render(request, "job_detail.html", job=job, m=job.match_details or {}, selection=selection,
-                  categories=settings_store.get(db, "role_categories"), **extra)
+                  categories=settings_store.get(db, "role_categories"), tailored_resume=tailored.latest(db, job.id),
+                  tailored_eligible=tailored.eligible(db, job), tailored_compiler=tailored.compiler() is not None,
+                  tailored_template=tailored.template_info(db) is not None,
+                  approved_resumes=_approved_resumes(db), today=date.today().isoformat(), **extra)
+
+
+def _approved_resumes(db: Session) -> list:
+    from jobpilot.models import ResumeVersion
+
+    return list(db.scalars(select(ResumeVersion).where(ResumeVersion.status == "approved")
+                           .order_by(ResumeVersion.id.desc())))
+
+
+@router.post("/jobs/{job_id:int}/tailored-resume")
+async def tailored_generate(job_id: int, request: Request, db: Session = Depends(get_db)):
+    """Generate (or reuse) this job's tailored resume, then validate it. Never submits anything."""
+    from jobpilot.services import tailored
+
+    job = get_or_404(db, Job, job_id)
+    form = await form_dict(request)
+    try:
+        tr = tailored.generate(db, request.app.state.settings, job, force=bool(form.get("force")))
+    except tailored.TailorError as exc:
+        return redirect(f"/jobs/{job_id}#tailored", err=str(exc))
+    db.commit()
+    if tr.status == "valid":
+        return redirect(f"/jobs/{job_id}#tailored", msg="Tailored resume ready and validated")
+    return redirect(f"/jobs/{job_id}#tailored", err=f"Tailored resume not generated: {(tr.error or '')[:300]}")
+
+
+@router.get("/tailored-resumes/{tr_id:int}/download")
+def tailored_download(tr_id: int, request: Request, db: Session = Depends(get_db)):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from jobpilot.models import TailoredResume
+    from jobpilot.services import tailored
+
+    tr = get_or_404(db, TailoredResume, tr_id)
+    settings = request.app.state.settings
+    if tr.status not in ("valid", "superseded", "outdated") or not tailored.file_ok(settings, tr):
+        raise HTTPException(404, "No valid file for this tailored resume")
+    return FileResponse(settings.files_dir / tr.pdf_path, media_type="application/pdf",
+                        filename=f"{tailored._slug(tr.company_name)}_{tr.job_id}_resume.pdf")
 
 
 @router.get("/jobs/{job_id:int}/resume-review")
@@ -187,7 +247,10 @@ def job_expire(job_id: int, db: Session = Depends(get_db)):
 @router.get("/sources")
 def sources_page(request: Request, edit: int | None = None, db: Session = Depends(get_db)):
     editing = db.get(JobSource, edit) if edit else None
-    return render(request, "sources.html", health=job_svc.source_health(db), adapters=ADAPTERS, editing=editing)
+    from jobpilot.services import regional_sources
+
+    return render(request, "sources.html", health=job_svc.source_health(db), adapters=ADAPTERS, editing=editing,
+                  regional=regional_sources.plan(db))
 
 
 @router.get("/sources/{source_id:int}")
@@ -214,6 +277,17 @@ async def source_save(request: Request, source_id: int | None = None, db: Sessio
     return redirect("/sources", msg="Source saved")
 
 
+@router.post("/sources/regional")
+def sources_regional(db: Session = Depends(get_db)):
+    from jobpilot.services import regional_sources
+
+    done = regional_sources.apply(db)
+    if not done["add"] and not done["extend"]:
+        return redirect("/sources", msg="The regional sources are already set up")
+    return redirect("/sources", msg=f"Added {len(done['add'])} source(s) and extended {len(done['extend'])} with "
+                                    "India / remote / Dubai. Run them (or dry-run them) below.")
+
+
 @router.post("/sources/{source_id:int}/delete")
 def source_delete(source_id: int, db: Session = Depends(get_db)):
     src = get_or_404(db, JobSource, source_id)
@@ -230,7 +304,7 @@ async def sources_run(request: Request, background: BackgroundTasks):
     settings, factory = request.app.state.settings, request.app.state.sessionmaker
 
     def _job():
-        run_task(settings, factory, "collect_jobs",
+        run_task(settings, factory, "collect_jobs_dry_run" if dry_run else "collect_jobs",
                  lambda s: job_svc.collect_all(s, settings, source_ids=ids, dry_run=dry_run), trigger="manual")
 
     background.add_task(_job)

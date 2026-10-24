@@ -155,11 +155,22 @@ def analytics_export(kind: str, db: Session = Depends(get_db)):
 
 @router.get("/gmail")
 def gmail_page(request: Request):
-    return render(request, "gmail.html", st=gmail.status(request.app.state.settings))
+    settings = request.app.state.settings
+    return render(request, "gmail.html", st=gmail.status(settings), ready=gmail.readiness(settings))
 
 
 def _client(request: Request) -> gmail.GmailClient:
     return gmail.GmailClient(request.app.state.settings)
+
+
+@router.get("/gmail/drafts/{draft_id:int}/send")
+def gmail_send_confirm(draft_id: int, request: Request, db: Session = Depends(get_db)):
+    """Confirmation screen: exactly what would be sent. Builds the message locally; contacts nothing."""
+    d = get_or_404(db, EmailDraft, draft_id)
+    settings = request.app.state.settings
+    preview = gmail.send_preview(db, settings, d)
+    ready = gmail.readiness(settings)
+    return render(request, "gmail_send.html", d=d, preview=preview, ready=ready)
 
 
 @router.post("/gmail/drafts/{draft_id:int}/{action}")
@@ -167,20 +178,65 @@ async def gmail_draft_action(draft_id: int, action: str, request: Request, db: S
     d = get_or_404(db, EmailDraft, draft_id)
     form = await form_dict(request)
     settings = request.app.state.settings
-    if not gmail.is_ready(settings):
-        return redirect(f"/drafts/{draft_id}", err="Gmail is not enabled/authorised")
+    ready = gmail.readiness(settings)
+    if not ready["ready"]:
+        return redirect(f"/drafts/{draft_id}", err="Gmail unavailable: " + "; ".join(ready["problems"]))
     try:
         if action == "create":
-            gmail.create_gmail_draft(db, settings, d, _client(request))
-            msg = "Draft created in your Gmail Drafts folder — you can send it from Gmail, then mark it as sent here."
+            res = gmail.create_gmail_draft(db, settings, d, _client(request))
+            att = res.get("attachment")
+            what = f" with {att['filename']} attached ({att['size']:,} bytes)" if att else " (no attachment)"
+            msg = (f"Gmail confirmed: the draft is in your Gmail Drafts{what}. Gmail draft id {res['id']}."
+                   if not res["reused"] else f"Already in your Gmail Drafts (id {res['id']}); no duplicate was created.")
+            msg += " Nothing was sent."
         elif action == "send":
-            gmail.send_via_gmail(db, settings, d, _client(request), form.get("confirm") or "")
-            msg = "Sent via Gmail"
+            if form.get("ack") != "1":
+                return redirect(f"/gmail/drafts/{draft_id}/send", err="Tick the confirmation box to send")
+            gmail.send_via_gmail(db, settings, d, _client(request), form.get("confirm") or "",
+                                 expected_hash=form.get("content_hash"))
+            msg = f"Gmail confirmed the message was sent (message id {d.gmail_message_id})."
+        elif action == "check":
+            msg = "Gmail check: " + gmail.reconcile(db, settings, d, _client(request))["message"]
         else:
             return redirect(f"/drafts/{draft_id}", err="Unknown action")
     except gmail.GmailError as exc:
         return redirect(f"/drafts/{draft_id}", err=str(exc))
     return redirect(f"/drafts/{draft_id}", msg=msg)
+
+
+@router.get("/telegram")
+def telegram_page(request: Request, db: Session = Depends(get_db)):
+    from jobpilot.integrations import telegram
+    from jobpilot.services import notifications
+
+    settings = request.app.state.settings
+    return render(request, "telegram.html", st=telegram.config_status(settings), recent=notifications.recent(db, 25),
+                  counts=notifications.counts(db), baseline=notifications.get_state(db, notifications.BASELINE_KEY),
+                  poller=getattr(request.app.state, "telegram_thread", None) is not None)
+
+
+@router.post("/telegram/{action}")
+def telegram_action(action: str, request: Request):
+    """Explicit actions only: each sends at most the messages it says, to your configured chat."""
+    from jobpilot.integrations import telegram
+    from jobpilot.services import notifications
+
+    settings, factory = request.app.state.settings, request.app.state.sessionmaker
+    st = telegram.config_status(settings)
+    if not st["ready"]:
+        return redirect("/telegram", err="Telegram not configured: " + "; ".join(st["problems"]))
+    if action == "test":
+        try:
+            ids = telegram.TelegramClient(settings).send_text("✅ JobPilot test message from the dashboard. No action needed.")
+        except telegram.TelegramError as exc:
+            return redirect("/telegram", err=f"Not delivered: {telegram.redact(str(exc), settings)}")
+        return redirect("/telegram", msg=f"Telegram confirmed delivery (message id {ids[0]})")
+    if action == "notify":
+        run = run_task(settings, factory, "notify", lambda s: notifications.run(s, settings))
+        if run.status == "success":
+            return redirect("/telegram", msg=run.message or "Done")
+        return redirect("/telegram", err=f"{run.status}: {run.message}")
+    return redirect("/telegram", err="Unknown action")
 
 
 @router.post("/gmail/{action}")
@@ -189,8 +245,9 @@ def gmail_action(action: str, request: Request):
     if action == "disconnect":
         gmail.revoke(settings)
         return redirect("/gmail", msg="Disconnected and token deleted")
-    if not gmail.is_ready(settings):
-        return redirect("/gmail", err="Gmail is not enabled/authorised")
+    ready = gmail.readiness(settings)
+    if not ready["ready"]:
+        return redirect("/gmail", err="Gmail unavailable: " + "; ".join(ready["problems"]))
     if action == "sync":
         run = run_task(settings, factory, "gmail_sync", lambda s: gmail.sync_replies(s, settings, gmail.GmailClient(settings)))
     elif action == "interviews":

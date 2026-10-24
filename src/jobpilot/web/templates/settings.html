@@ -13,6 +13,7 @@
     <tr><th>HTTP</th><td>timeout {{ settings.http_timeout_seconds }}s · retries {{ settings.http_max_retries }} · ≥{{ settings.http_min_interval_seconds }}s between requests per host · robots.txt {{ "respected" if settings.respect_robots_txt else "ignored" }}</td></tr>
     <tr><th>Browser automation</th><td>{{ "enabled" if settings.browser_enabled else "disabled" }}</td></tr>
     <tr><th>Gmail</th><td>{{ "enabled" if settings.gmail_enabled else "disabled" }} · <a href="/gmail">Gmail integration →</a></td></tr>
+    <tr><th>Telegram</th><td>{{ "enabled" if settings.telegram_enabled else "disabled" }} · <a href="/telegram">Telegram notifications →</a></td></tr>
     <tr><th>In-process scheduler</th><td>{{ "enabled" if settings.scheduler_enabled else "disabled" }}</td></tr>
   </table>
 </section>

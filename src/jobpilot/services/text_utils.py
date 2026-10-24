@@ -76,6 +76,39 @@ def html_to_text(html: str | None) -> str:
     return "\n".join(out).strip()
 
 
+_MARKUP_TAGS = r"(?:p|br|li|ul|ol|div|span|b|i|u|strong|em|h[1-6]|table|thead|tbody|tr|td|th|section|a|img|hr|font|blockquote)"
+# Treated as HTML only with a closing tag or a line break: a lone "<div>" mentioned in prose stays text.
+_MARKUP = re.compile(rf"</\s*{_MARKUP_TAGS}\s*>|<\s*br\s*/?\s*>", re.I)
+_ENCODED_MARKUP = re.compile(rf"&lt;\s*/?\s*{_MARKUP_TAGS}\b", re.I)
+_LEFTOVER_CLOSING_TAG = re.compile(rf"</\s*{_MARKUP_TAGS}\s*>", re.I)
+
+
+def description_to_text(value: str | None) -> str:
+    """Readable text of a job description that may be HTML, HTML encoded twice, or plain text.
+
+    - HTML: converted once (``html_to_text``).
+    - HTML encoded twice (``&lt;p&gt;…``, as some career sites publish it in JSON-LD): decoded a second time, but only
+      when the value contains encoded tags *and* one decode still leaves real closing tags such as ``</p>``.
+    - Plain text (no closing tag or ``<br>``): entities decoded and whitespace normalised, without the HTML parser, so
+      literal text such as ``List<String>``, ``a < b`` or a lone ``<div>`` mentioned in prose is kept.
+    """
+    import html as _html
+
+    if not value:
+        return ""
+    if not _MARKUP.search(value) and not _ENCODED_MARKUP.search(value):
+        lines = [clean_ws(line) for line in _html.unescape(value).splitlines()]
+        out: list[str] = []
+        for line in lines:
+            if line or (out and out[-1]):
+                out.append(line)
+        return "\n".join(out).strip()
+    text = html_to_text(value)
+    if _ENCODED_MARKUP.search(value) and _LEFTOVER_CLOSING_TAG.search(text):
+        text = html_to_text(text)
+    return text
+
+
 def contains_term(haystack_norm: str, term: str) -> bool:
     """Whole-word/phrase match of ``term`` in an already-normalised haystack."""
     t = normalize(term)

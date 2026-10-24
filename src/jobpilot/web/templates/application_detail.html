@@ -19,9 +19,9 @@
     {{ field("note", "Note") }}
     <div class="actions"><button {% if not next_states %}disabled{% endif %}>Update status</button></div>
   </form>
-  <table class="table compact">
+  <div class="table-wrap"><table class="table compact">
     {% for e in app.events|reverse %}<tr><td class="nowrap">{{ e.ts|dt }}</td><td>{{ e.from_status or "—" }} → <b>{{ e.to_status }}</b></td><td>{{ e.note or "" }}</td><td class="muted">{{ e.actor }}</td></tr>{% endfor %}
-  </table>
+  </table></div>
 </section>
 
 <section class="card" id="preparation">
@@ -160,7 +160,7 @@
     <li>Copy confirmed details below; answer every other question yourself.</li>
     <li>Submit, then save the confirmation (email text, page text or screenshot) under Evidence.</li>
   </ol>
-  {% if manual %}<table class="table compact">{% for label, value in manual %}<tr><td>{{ label }}</td><td id="mf{{ loop.index }}">{{ value }}</td><td><button type="button" class="small" data-copy="mf{{ loop.index }}">copy</button></td></tr>{% endfor %}</table>
+  {% if manual %}<div class="table-wrap"><table class="table compact">{% for label, value in manual %}<tr><td>{{ label }}</td><td id="mf{{ loop.index }}">{{ value }}</td><td><button type="button" class="small" data-copy="mf{{ loop.index }}">copy</button></td></tr>{% endfor %}</table></div>
   {% else %}<p class="muted small">Confirm your profile to see copyable details.</p>{% endif %}
 </section>
 </div>

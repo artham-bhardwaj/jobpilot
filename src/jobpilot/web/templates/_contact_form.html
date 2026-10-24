@@ -7,10 +7,10 @@
     {{ field("company_name", "Company", (c.company.name if c and c.company else (prefill_job.company_name if prefill_job else none))) }}
     {{ select("role_type", "Role", ["recruiter","hiring_manager","referral","engineer","other"], c.role_type if c else none) }}
     {{ field("email", "Email", c.email if c else none, type="email") }}
-    {{ select("email_status", "Email status", [("unverified","unverified — published/obtained, not confirmed"),("guessed","guessed — inferred, NOT verified"),("verified","verified — confirmed working")], c.email_status if c else "unverified") }}
-    {{ field("linkedin_url", "Profile URL", c.linkedin_url if c else none, type="url") }}
+    {{ select("email_status", "Email status", [("unverified","unverified — published/obtained, not confirmed"),("apollo_reported","Apollo-reported — Apollo's check, not confirmed by you"),("guessed","guessed — inferred, NOT verified"),("verified","verified — confirmed working")], c.email_status if c else "unverified") }}
+    {{ field("linkedin_url", "LinkedIn / profile URL (paste it; JobPilot never visits LinkedIn)", c.linkedin_url if c else none, type="url") }}
     {{ field("phone", "Phone", c.phone if c else none) }}
-    {{ select("source_type", "Where you found it", ["job_posting","company_website","public_profile","email_thread","referral","manual"], c.source_type if c else ("job_posting" if prefill_job else "manual")) }}
+    {{ select("source_type", "Where you found it", [("job_posting","job posting"),("company_website","company website"),("linkedin_manual","LinkedIn (found by you)"),("apollo_manual","Apollo (found by you)"),("public_profile","other public profile"),("email_thread","email thread"),("referral","referral"),("manual","manual")], c.source_type if c else ("job_posting" if prefill_job else "manual")) }}
     {{ field("source_url", "Source URL", c.source_url if c else (prefill_job.source_url if prefill_job else none), type="url") }}
     {% if prefill_job or (c and c.job_id) %}<input type="hidden" name="job_id" value="{{ prefill_job.id if prefill_job else c.job_id }}">{% endif %}
   </div>

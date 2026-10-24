@@ -1,6 +1,6 @@
 """Polite, defensive HTTP client for job sources.
 
-- Timeouts, bounded retries (honours ``Retry-After``), per-host rate limiting, robots.txt.
+- Timeouts, bounded retries (honours ``Retry-After``), per-host rate limiting, robots.txt (RFC 9309).
 - SSRF protection: only ``http(s)``; no credentials in URLs; every request **and every
   redirect hop** must resolve exclusively to globally routable addresses (no loopback,
   private, link-local, shared, reserved or multicast ranges). Redirects are followed
@@ -16,13 +16,13 @@ import logging
 import socket
 import threading
 import time
-import urllib.robotparser
 from collections import Counter
 from urllib.parse import urljoin, urlsplit
 
 import requests
 
 from jobpilot.config import Settings
+from jobpilot.sources.robots import RobotsRules
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class PoliteHttp:
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": settings.user_agent, "Accept-Language": "en"})
         self._last: dict[str, float] = {}
-        self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._robots: dict[str, RobotsRules | None] = {}
         self._lock = threading.Lock()
         self.request_count = 0
         # Response classes seen: ok, redirect, rate_limited (429), client_error, server_error, network_error.
@@ -137,16 +137,22 @@ class PoliteHttp:
             r.close()
 
     def _request(self, url: str, *, accept: str, params: dict | None, max_bytes: int,
-                 check_robots: bool) -> requests.Response:
-        """One logical GET, following redirects manually and validating every hop."""
+                 check_robots: bool, json_body: dict | None = None) -> requests.Response:
+        """One logical GET (or a JSON POST to a public search endpoint), following redirects manually and validating
+        every hop. A POST is never re-sent to a redirect target: the redirect is followed with a GET, as browsers do."""
         for hop in range(MAX_REDIRECTS + 1):
             self._check_url(url)
             if check_robots and not self._robots_allows(url):
                 raise BlockedByRobots(f"robots.txt disallows fetching {url}")
             self._throttle(urlsplit(url).netloc)
             try:
-                r = self.session.get(url, params=params if hop == 0 else None, timeout=self.settings.http_timeout_seconds,
-                                     headers={"Accept": accept}, allow_redirects=False, stream=True)
+                if json_body is not None and hop == 0:
+                    r = self.session.post(url, json=json_body, timeout=self.settings.http_timeout_seconds,
+                                          headers={"Accept": accept}, allow_redirects=False, stream=True)
+                else:
+                    r = self.session.get(url, params=params if hop == 0 else None,
+                                         timeout=self.settings.http_timeout_seconds,
+                                         headers={"Accept": accept}, allow_redirects=False, stream=True)
             except requests.RequestException:
                 self.stats["network_error"] += 1
                 raise
@@ -168,7 +174,7 @@ class PoliteHttp:
         parts = urlsplit(url)
         base = f"{parts.scheme}://{parts.netloc}"
         if base not in self._robots:
-            rp: urllib.robotparser.RobotFileParser | None = urllib.robotparser.RobotFileParser()
+            rp: RobotsRules | None = RobotsRules()
             try:
                 r = self._request(f"{base}/robots.txt", accept="text/plain", params=None,
                                   max_bytes=ROBOTS_MAX_BYTES, check_robots=False)
@@ -191,12 +197,13 @@ class PoliteHttp:
         return True if rp is None else rp.can_fetch(self.settings.user_agent, url)
 
     def get(self, url: str, *, accept: str = "*/*", params: dict | None = None,
-            max_bytes: int = MAX_BYTES) -> requests.Response:
+            max_bytes: int = MAX_BYTES, json_body: dict | None = None) -> requests.Response:
         attempts = self.settings.http_max_retries + 1
         last_exc: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                r = self._request(url, accept=accept, params=params, max_bytes=max_bytes, check_robots=True)
+                r = self._request(url, accept=accept, params=params, max_bytes=max_bytes, check_robots=True,
+                                  json_body=json_body)
             except requests.RequestException as exc:
                 last_exc = exc
                 log.warning("http error", extra={"url": url, "attempt": attempt, "error": str(exc)})
@@ -216,8 +223,25 @@ class PoliteHttp:
                 continue
             if r.status_code >= 400:
                 raise FetchError(f"HTTP {r.status_code} for {url}", status=r.status_code)
+            if "charset" not in (r.headers.get("Content-Type") or "").lower():
+                # requests assumes ISO-8859-1 for text/* without a charset, which turns UTF-8 pages into mojibake
+                # ("Bachelor’s" → "Bachelorâs"). Use UTF-8 when the bytes are valid UTF-8.
+                try:
+                    r.content.decode("utf-8")
+                    r.encoding = "utf-8"
+                except UnicodeDecodeError:
+                    r.encoding = r.apparent_encoding or r.encoding
             return r
         raise FetchError(f"Failed to fetch {url}: {last_exc}")
+
+    def post_json(self, url: str, payload: dict):
+        """POST a JSON query to a public, read-only search endpoint (e.g. a career site's job search) and return the
+        decoded JSON. Same safety as ``get``: address checks, robots.txt, rate limit, size cap, bounded retries."""
+        r = self.get(url, accept="application/json", json_body=payload)
+        try:
+            return r.json()
+        except ValueError as exc:
+            raise FetchError(f"Invalid JSON from {url}") from exc
 
     def get_json(self, url: str, params: dict | None = None):
         r = self.get(url, accept="application/json", params=params)

@@ -10,7 +10,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -55,10 +55,37 @@ class Settings(BaseSettings):
     gmail_client_secrets_path: Path | None = None
     gmail_allow_read_bodies: bool = False
 
+    # Telegram (optional): outbound notifications and read-only commands from ONE chat.
+    # The token is a SecretStr: printing settings shows "**********", never the token.
+    telegram_enabled: bool = False
+    telegram_bot_token: SecretStr | None = None
+    telegram_chat_id: str | None = None
+    # Answer read-only commands (/status, /jobs...) by long polling while `jobpilot serve` runs.
+    telegram_commands_enabled: bool = True
+
+    # Apollo (optional): read from JOBPILOT_APOLLO_API_KEY only; a SecretStr, never printed. Unused unless the
+    # `apollo` setting is enabled too.
+    apollo_api_key: SecretStr | None = None
+
     max_upload_bytes: int = 10 * 1024 * 1024
     # Serve the machine-readable API schema at /openapi.json. No Swagger UI is ever served
     # (it would load scripts from a third-party CDN).
     enable_openapi: bool = False
+
+    @field_validator("telegram_chat_id", mode="before")
+    @classmethod
+    def _chat_id(cls, v):
+        if v in (None, ""):
+            return None
+        v = str(v).strip()
+        if not v.lstrip("-").isdigit():
+            raise ValueError("JOBPILOT_TELEGRAM_CHAT_ID must be a numeric Telegram chat id")
+        return v
+
+    @field_validator("telegram_bot_token", "apollo_api_key", mode="before")
+    @classmethod
+    def _token(cls, v):
+        return None if v in (None, "") else v
 
     @field_validator("log_level")
     @classmethod

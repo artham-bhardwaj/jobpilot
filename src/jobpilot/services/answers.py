@@ -44,6 +44,33 @@ _STOP = {"the", "a", "an", "to", "of", "in", "on", "for", "and", "or", "you", "y
          "this", "that", "what", "why", "how", "please", "describe", "tell", "us", "about", "have", "any", "we", "our", "be"}
 
 
+# Attestations only you can make: never filled by JobPilot, never answered from Telegram, never reused.
+LEGAL_RX = re.compile(r"declar|certify|attest|consent|\bagree|acknowledg|terms|privacy (?:notice|policy)|truthful|"
+                      r"accurate to the best|\bnda\b|non-disclosure|signature|\bsign\b|e-sign|"
+                      r"typ(?:e|ing) your (?:full |legal )?name", re.I)
+
+
+def is_legal(question: str | None) -> bool:
+    return bool(LEGAL_RX.search(question or ""))
+
+
+def resolve_from_form(session: Session, app: Application, verified_labels: list[str]) -> int:
+    """Open questions whose field JobPilot has now filled and verified from your confirmed profile are closed
+    (status ``resolved``, not ``approved``: you did not answer them, your profile did)."""
+    labels = [normalize(re.sub(r"\s*\*\s*$", "", x)) for x in verified_labels if x]
+    n = 0
+    for q in session.scalars(select(ApplicationQuestion).where(ApplicationQuestion.application_id == app.id,
+                                                               ApplicationQuestion.status == "unanswered")):
+        text = normalize(q.question)
+        if any(lab and (text == lab or text.startswith(lab + " ")) for lab in labels) and not is_legal(q.question):
+            q.status, q.answer_source = "resolved", "profile (filled and verified on the form)"
+            n += 1
+    if n:
+        session.flush()
+        audit.record(session, "application.questions_resolved_by_profile", "application", app.id, count=n)
+    return n
+
+
 def sensitive_reason(question: str) -> str | None:
     for label, rx in SENSITIVE_PATTERNS:
         if re.search(rx, question or "", re.I):
@@ -157,4 +184,4 @@ def approve(session: Session, q: ApplicationQuestion, answered_myself: bool = Fa
 
 def unanswered_count(session: Session, app: Application) -> int:
     return len(list(session.scalars(select(ApplicationQuestion.id).where(
-        ApplicationQuestion.application_id == app.id, ApplicationQuestion.status != "approved"))))
+        ApplicationQuestion.application_id == app.id, ApplicationQuestion.status == "unanswered"))))

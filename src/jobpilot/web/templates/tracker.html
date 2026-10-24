@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty, score %}
+{% block title %}My tracker{% endblock %}
+{% block content %}
+<h1>My application tracker</h1>
+<p class="muted">Every job JobPilot found, with its apply link. Tell JobPilot when you've applied and which resume you
+used; employer emails (subjects only) then move the application to rejected, assessment, interview or offer.
+⭐ = dream company ({{ dream|join(", ") or "none set" }}).</p>
+
+<form method="get" action="/tracker" class="card filters">
+  <label class="field"><span>Search company or title</span><input type="search" name="q" value="{{ q }}" placeholder="e.g. amazon"></label>
+  <label class="field"><span><input type="checkbox" name="all" value="1" {% if show_all %}checked{% endif %}> include ineligible / low-score jobs</span></label>
+  <div class="actions"><button class="primary">Search</button><a href="/tracker" class="button">Reset</a></div>
+</form>
+
+{% if asks %}
+<div class="card">
+  <h2>📬 Employer emails — what happened?</h2>
+  {% for it in asks %}
+    <div class="card"><b>{{ it.title }}</b><div class="muted small">{{ it.reason }}</div>
+      {% for label, v in [("Rejected","rejected"),("Assessment","assessment"),("Interview","interview"),("Offer","offer"),("Nothing changed","none")] %}
+        <form method="post" action="/tracker/emails/{{ it.id }}" class="inline"><input type="hidden" name="status" value="{{ v }}"><button class="small">{{ label }}</button></form>
+      {% endfor %}
+    </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>🏢 Applications by company{% if q %} — “{{ q }}”{% endif %}</h2>
+  {% if groups %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Company</th><th>Application</th><th>Status</th><th>Applied</th><th>Resume</th><th>Cooldown</th></tr></thead>
+    <tbody>
+    {% for g in groups %}{% for a in g.applications %}
+      <tr>
+        <td class="wrap">{% if loop.first %}{% if g.dream %}⭐ {% endif %}<b>{{ g.company }}</b>
+          <div class="muted small">{{ g.applications|length }} application(s){% if g.last_applied %} · last {{ g.last_applied|d }}{% endif %}</div>{% endif %}</td>
+        <td class="wrap"><a href="/applications/{{ a.id }}">#{{ a.id }} {{ a.job.title if a.job else "?" }}</a></td>
+        <td>{{ badge(a.status) }}{% if a.confirmation_method == "self_reported" %} <span class="muted small">(you)</span>{% endif %}
+          {% if a.status in ("rejected","assessment","interview","offer") %}<form method="post" action="/tracker/applications/{{ a.id }}/undo" class="inline"><button class="small" title="Undo an update JobPilot made from an email">undo</button></form>{% endif %}</td>
+        <td class="nowrap small">{{ a.applied_at|d if a.applied_at else "not submitted" }}</td>
+        <td class="small">{{ resume_label(a) }}</td>
+        <td class="small">{% if loop.first %}
+          {% if g.cooldown_until %}{% if g.in_cooldown %}{{ badge("wait until " ~ (g.cooldown_until|d), "b-warn") }}{% else %}{{ badge("ok to apply", "b-ok") }}{% endif %}
+            <div class="muted">{{ g.cooldown_days }} days</div>{% elif g.cooldown_days %}{{ g.cooldown_days }} days{% else %}<span class="muted">not set</span>{% endif %}
+        {% endif %}</td>
+      </tr>
+    {% endfor %}{% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ empty("No applications yet" ~ (" at “" ~ q ~ "”" if q else "") ~ ". Mark a job below as applied.") }}{% endif %}
+  <form method="post" action="/tracker/cooldown" class="inline-form">
+    <label class="field"><span>Company</span><input name="company" value="{{ q }}" placeholder="Amazon" required></label>
+    <label class="field"><span>Cooldown (days, 0 = none)</span><input type="number" name="days" min="0" max="730" required></label>
+    <input type="hidden" name="next" value="/tracker{% if q %}?q={{ q|urlencode }}{% endif %}">
+    <div class="actions"><button>Set cooldown</button></div>
+    <small class="muted">Companies rarely publish a cooldown; set the one you know. None is assumed.</small>
+  </form>
+</div>
+
+<div class="card">
+<h2>🔎 Jobs found ({{ jobs|length }}){% if not show_all %} — relevant and not ineligible{% endif %}</h2>
+{% if jobs %}
+<div class="table-wrap"><table class="table">
+  <thead><tr><th>Score</th><th>Job</th><th>Eligibility</th><th>Apply</th><th>Did you apply?</th></tr></thead>
+  <tbody>
+  {% for j in jobs %}{% set a = app_by_job.get(j.id) %}
+    <tr>
+      <td>{{ score(j.relevance_score) }}</td>
+      <td class="wrap">{% if is_dream(j.company_name) %}⭐ {% endif %}<a href="/jobs/{{ j.id }}"><b>{{ j.title }}</b></a>
+        <div class="muted small">{{ j.company_name or "?" }} · {{ j.location or "location not stated" }}</div></td>
+      <td>{{ badge(j.eligibility) }}</td>
+      <td>{% if j.apply_url or j.source_url %}<a href="{{ j.apply_url or j.source_url }}" target="_blank" rel="noopener noreferrer">apply ↗</a>{% endif %}</td>
+      <td class="small">
+        {% if a and a.applied_at %}{{ badge(a.status) }} {{ a.applied_at|d }} · {{ resume_label(a) }}
+        {% else %}
+          <form method="post" action="/tracker/jobs/{{ j.id }}/applied" class="inline">
+            <select name="resume_version_id">{% for v in resumes %}<option value="{{ v.id }}">{{ v.resume.name }} v{{ v.version_no }}</option>{% endfor %}<option value="">another resume</option></select>
+            <input type="date" name="applied_on" value="{{ today }}" max="{{ today }}">
+            <input type="hidden" name="next" value="/tracker{% if q or show_all %}?q={{ q|urlencode }}{% if show_all %}&all=1{% endif %}{% endif %}">
+            <button class="small primary">✅ applied</button></form>
+          <form method="post" action="/tracker/jobs/{{ j.id }}/later" class="inline"><button class="small">⏳ not yet</button></form>
+          <form method="post" action="/tracker/jobs/{{ j.id }}/later" class="inline"><input type="hidden" name="action" value="not_interested"><button class="small">🚫 not interested</button></form>
+          {% if a %}<div class="muted">application #{{ a.id }}: {{ a.status|replace("_"," ") }}</div>{% endif %}
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}{{ empty("No jobs match.") }}{% endif %}
+</div>
+{% endblock %}

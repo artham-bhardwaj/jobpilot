@@ -107,6 +107,7 @@ def test_milestone10_end_to_end(app, db, settings, gmail_settings, monkeypatch):
 
     # 12. Recruiter draft from verified data; 13. revision history kept.
     contact, _ = cs.save_contact(db, cs.ContactIn(name="Jane Recruiter", email="jane@example.com", company_name="Examplecorp"))
+    cs.verify_email(db, contact, "synthetic test: address confirmed")  # sending requires a verified recipient
     draft = ds.create_draft(db, ds.DraftCreate(template_key="recruiter_outreach", job_id=job.id, contact_id=contact.id,
                                                application_id=application.id))
     assert "Test Candidate" in draft.body

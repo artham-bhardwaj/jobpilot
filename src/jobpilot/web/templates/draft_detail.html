@@ -2,15 +2,44 @@
 {% from "_macros.html" import badge, empty, field, post_button %}
 {% block title %}Draft #{{ d.id }}{% endblock %}
 {% block content %}
-<p><a href="/drafts">← Drafts</a></p>
+<p class="crumbs"><a href="/drafts">← Email drafts</a></p>
 <h1>{{ kind_labels.get(d.kind, d.kind) }} {{ badge(d.status) }}</h1>
 <p class="muted">
-  {% if d.contact %}To <a href="/contacts/{{ d.contact.id }}">{{ d.contact.display_name }}</a>{% endif %}
+  {% if d.contact %}To <a href="/contacts/{{ d.contact.id }}">{{ d.contact.display_name }}</a>{% else %}To {{ d.to_address or "(no recipient yet)" }}{% endif %}
   {% if d.job %} · re <a href="/jobs/{{ d.job.id }}">{{ d.job.title }}</a> at {{ d.job.company_name or "?" }}{% endif %}
-  {% if d.resume_version %} · resume: <a href="/resumes/versions/{{ d.resume_version.id }}/download">{{ d.resume_version.label }}</a>{% else %} · no resume attached{% endif %}
+  {% if d.resume_version %} · resume: <a href="/resumes/versions/{{ d.resume_version.id }}/download">{{ d.resume_version.label }}</a>{% else %} · no resume selected{% endif %}
   {% if d.application_id %} · <a href="/applications/{{ d.application_id }}">application #{{ d.application_id }}</a>{% endif %}
 </p>
 {% for w in warnings %}<div class="notice warn">{{ w }}</div>{% endfor %}
+{% if reserved and d.status in ("draft", "approved") %}<div class="notice warn">Recipient {{ d.to_address }}: {{ reserved }}. A Gmail draft can be created for review, but JobPilot will refuse to send it.</div>{% endif %}
+
+<section class="card" id="status" aria-labelledby="status-h">
+  <h2 id="status-h">Status</h2>
+  <table class="kv status-table">
+    <tr><th scope="row">Local draft</th><td>{{ badge(d.status) }}
+      {% if d.status == "draft" %}saved in JobPilot only{% elif d.status == "cancelled" %}cancelled{% else %}saved in JobPilot{% endif %}</td></tr>
+    <tr><th scope="row">Approval</th><td>{% if d.approved_at %}{{ badge("approved") }} approved {{ d.approved_at|dt }} (approval only changes JobPilot; it sends nothing){% else %}{{ badge("not approved", "b-warn") }}{% endif %}</td></tr>
+    <tr><th scope="row">Gmail</th><td>
+      {% set gs = d.gmail_status %}
+      {% if gs == "created" %}{{ badge("in Gmail Drafts", "b-ok") }} Gmail confirmed draft <code>{{ d.gmail_draft_id }}</code>{% if d.gmail_synced_at %} · checked {{ d.gmail_synced_at|dt }}{% endif %}
+      {% elif gs == "pending" %}{{ badge("unknown", "b-warn") }} a create request got no answer; Gmail may or may not have the draft — “Create Gmail draft” checks Gmail Drafts before creating another
+      {% elif gs == "outdated" %}{{ badge("outdated", "b-warn") }} the copy in Gmail Drafts (<code>{{ d.gmail_stale_draft_id }}</code>) has old text — delete it in Gmail
+      {% elif gs == "failed" %}{{ badge("failed", "b-error") }} Gmail did not create the draft
+      {% elif gs in ("sending", "send_unknown") %}{{ badge("send outcome unknown", "b-error") }} a send request got no clear answer — use “Check Gmail”; JobPilot will not retry
+      {% elif gs == "missing" %}{{ badge("not in Gmail", "b-warn") }} the Gmail draft is gone and no sent message was found
+      {% elif gs == "sent" %}{{ badge("sent", "b-ok") }} Gmail confirmed message <code>{{ d.gmail_message_id }}</code>
+      {% else %}{{ badge("no Gmail draft", "b-none") }} not created in Gmail{% endif %}
+      {% if d.gmail_error %}<div class="small err-text">{{ d.gmail_error }}</div>{% endif %}</td></tr>
+    <tr><th scope="row">Sent</th><td>
+      {% if d.sent_via == "gmail" %}{{ badge("sent via Gmail", "b-ok") }} {{ d.sent_at|dt }} · confirmed by Gmail{% if d.gmail_message_id %} (message <code>{{ d.gmail_message_id }}</code>){% endif %}
+      {% elif d.status == "sent" %}{{ badge("recorded by you", "b-warn") }} {{ d.sent_at|dt }} · manual record: not sent by JobPilot, not verified with Gmail
+      {% else %}{{ badge("not sent", "b-none") }}{% endif %}</td></tr>
+    <tr><th scope="row">Resume attachment</th><td>
+      {% if d.gmail_attachment and d.gmail_status in ("created", "sent", "sending", "send_unknown") %}{{ badge("attached in Gmail", "b-ok") }} {{ d.gmail_attachment.filename }} · {{ "{:,}".format(d.gmail_attachment.size) }} bytes · {{ d.gmail_attachment.content_type }}
+      {% elif d.resume_version %}{{ badge("selected", "b-warn") }} <a href="/resumes/versions/{{ d.resume_version.id }}/download">{{ d.resume_version.label }}</a> — attached only when the Gmail draft is created{% if not d.resume_version.file_path %}; <b>this version has no file</b>{% endif %}
+      {% else %}{{ badge("none", "b-none") }} no resume selected{% endif %}</td></tr>
+  </table>
+</section>
 {% if d.missing_fields %}<div class="notice bad">Fill in before approving (replace the <code>[[MISSING: …]]</code> markers with real information — nothing will be invented for you): {{ d.missing_fields|join(", ") }}</div>{% endif %}
 {% if d.suppressed_reason %}<div class="notice">Follow-ups suppressed: {{ d.suppressed_reason }}</div>{% endif %}
 
@@ -43,13 +72,8 @@ Subject: {{ d.subject }}
       {% if problems %}<span class="muted small">Cannot approve yet: {{ problems|join("; ") }}</span>{% endif %}
     {% endif %}
     {% if d.status == "approved" %}
-      {{ post_button("/drafts/" ~ d.id ~ "/sent", "I sent it — mark as sent", "primary", confirm="Record this email as sent by you?") }}
-      {% if gmail_ready %}
-        <form method="post" action="/gmail/drafts/{{ d.id }}/create" class="inline"><button>Create Gmail draft</button></form>
-        <form method="post" action="/gmail/drafts/{{ d.id }}/send" class="inline" data-confirm="Send this email now from your Gmail account to {{ d.to_address }}?">
-          <input type="hidden" name="confirm" value="SEND"><button class="danger">Send via Gmail</button></form>
-      {% endif %}
       {{ post_button("/drafts/" ~ d.id ~ "/unapprove", "Back to draft") }}
+      {{ post_button("/drafts/" ~ d.id ~ "/sent", "I sent it myself — record manually", confirm="Record that YOU sent this email outside JobPilot? JobPilot will not send anything and cannot verify it.") }}
     {% endif %}
     {% if d.status == "sent" and not d.reply_received_at %}
       <form method="post" action="/drafts/{{ d.id }}/reply" class="inline"><input type="text" name="summary" placeholder="reply summary (optional)" style="max-width:240px"><button>Record reply</button></form>
@@ -57,6 +81,29 @@ Subject: {{ d.subject }}
     {% endif %}
     {% if d.status in ("draft", "approved") %}{{ post_button("/drafts/" ~ d.id ~ "/cancel", "Cancel draft", "danger", confirm="Cancel this draft?") }}{% endif %}
   </div>
+</section>
+
+<section class="card" id="gmail" aria-labelledby="gmail-h">
+  <h2 id="gmail-h">Gmail</h2>
+  {% if not gmail_ready.ready %}
+    <div class="notice">Gmail actions are unavailable in this server: {{ gmail_ready.problems|join("; ") }}. See <a href="/gmail">Gmail settings</a>.</div>
+  {% elif d.status == "approved" %}
+    {% if gmail_problems %}<div class="notice warn">{{ gmail_problems|join("; ") }}</div>{% endif %}
+    <div class="actions">
+      {% if d.gmail_status not in ("created", "sending", "send_unknown", "sent") %}
+        <form method="post" action="/gmail/drafts/{{ d.id }}/create" class="inline"><button class="primary" {% if gmail_problems %}disabled{% endif %}>Create Gmail draft</button></form>
+      {% endif %}
+      {% if d.gmail_draft_id or d.gmail_status in ("pending", "sending", "send_unknown") %}
+        <form method="post" action="/gmail/drafts/{{ d.id }}/check" class="inline"><button>Check Gmail</button></form>
+      {% endif %}
+      {% if d.gmail_status not in ("sending", "send_unknown") %}<a class="button" href="/gmail/drafts/{{ d.id }}/send">Review and send…</a>{% endif %}
+    </div>
+    <p class="muted small">Creating a Gmail draft never sends anything. Sending is a separate step with its own confirmation screen.</p>
+  {% elif d.status == "sent" %}
+    {% if d.gmail_thread_id %}<p class="small">Replies on this Gmail thread are detected by <a href="/gmail">Check for replies</a>.</p>{% else %}<p class="muted small">Not sent through Gmail, so replies can't be detected automatically — record them below.</p>{% endif %}
+  {% else %}
+    <p class="muted small">Approve the draft first; Gmail only ever receives text you approved.</p>
+  {% endif %}
 </section>
 
 {% if revisions %}
@@ -75,7 +122,7 @@ Subject: {{ d.subject }}
     <tr><th>Sent</th><td>{{ d.sent_at|dt }}{% if d.sent_via %} via {{ d.sent_via }}{% endif %}</td></tr>
     <tr><th>Follow-up due</th><td>{{ d.follow_up_due_at|dt }}</td></tr>
     <tr><th>Reply received</th><td>{{ d.reply_received_at|dt }}</td></tr>
-    {% if d.gmail_draft_id or d.gmail_message_id %}<tr><th>Gmail</th><td>draft {{ d.gmail_draft_id or "—" }} · message {{ d.gmail_message_id or "—" }} · thread {{ d.gmail_thread_id or "—" }}</td></tr>{% endif %}
+    {% if d.gmail_draft_id or d.gmail_message_id or d.gmail_thread_id %}<tr><th>Gmail ids</th><td>draft {{ d.gmail_draft_id or "—" }} · message {{ d.gmail_message_id or "—" }} · thread {{ d.gmail_thread_id or "—" }}</td></tr>{% endif %}
   </table>
   {% if thread|length > 1 %}
   <h3>Thread</h3>

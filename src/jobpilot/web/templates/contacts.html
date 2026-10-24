@@ -44,11 +44,11 @@ public or authorised sources. Guessed addresses are always labelled as guessed.<
   <h2>Do-not-contact list</h2>
   <p class="muted small">Blocks drafting, approval, sending and follow-ups for matching addresses, domains or companies.</p>
   {% if dnc %}
-  <table class="table compact">
+  <div class="table-wrap"><table class="table compact">
     <thead><tr><th>Type</th><th>Value</th><th>Reason</th><th>Added</th><th></th></tr></thead>
     {% for r in dnc %}<tr><td>{{ r.kind }}</td><td>{{ r.value }}</td><td>{{ r.reason or "" }}</td><td>{{ r.created_at|d }}</td>
       <td><form method="post" action="/dnc/{{ r.id }}/delete" class="inline" data-confirm="Remove from do-not-contact list?"><button class="small">remove</button></form></td></tr>{% endfor %}
-  </table>
+  </table></div>
   {% else %}{{ empty("Empty.") }}{% endif %}
   <form method="post" action="/dnc" class="filters">
     {{ select("kind", "Type", ["email", "domain", "company"]) }}

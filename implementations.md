@@ -3,6 +3,18 @@
 Every implementation in this repository, newest first, with a local timestamp. See `CLAUDE.md` for the rule and the
 entry format. Earlier milestones (before this log existed) are summarised in `IMPLEMENTATION_STATUS.md`.
 
+## 2026-11-02 00:12 IST — Remove personal details from the public repository
+
+- Why: the GitHub repo is public. A pre-push scan found a real phone number in a code comment and a test, and an
+  address line in the status notes. No keys, tokens or secrets were found anywhere in the history (test tokens are
+  synthetic).
+- Phone number replaced with a fake one (`98765 43210`); the address line replaced with "an address line".
+- Files: `src/jobpilot/automation/apply.py` (comment only), `tests/test_m28_form_filling.py`,
+  `IMPLEMENTATION_STATUS.md`.
+- Migrations: none.
+- Verification: `pytest tests/test_m28_form_filling.py -k phone`: 1 passed. `git grep` finds neither value.
+- Left to do: older commits on GitHub still contain both values until the history is rewritten (needs your OK).
+
 ## 2026-11-01 20:50 IST — Master resume v3 (new backend skills)
 
 - Why: you asked for the Master resume to list the backend skills added to the hub, so tailored resumes include them.

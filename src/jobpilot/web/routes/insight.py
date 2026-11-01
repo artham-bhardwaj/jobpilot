@@ -190,8 +190,6 @@ async def gmail_draft_action(draft_id: int, action: str, request: Request, db: S
                    if not res["reused"] else f"Already in your Gmail Drafts (id {res['id']}); no duplicate was created.")
             msg += " Nothing was sent."
         elif action == "send":
-            if form.get("ack") != "1":
-                return redirect(f"/gmail/drafts/{draft_id}/send", err="Tick the confirmation box to send")
             gmail.send_via_gmail(db, settings, d, _client(request), form.get("confirm") or "",
                                  expected_hash=form.get("content_hash"))
             msg = f"Gmail confirmed the message was sent (message id {d.gmail_message_id})."

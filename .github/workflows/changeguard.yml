@@ -1,0 +1,56 @@
+# ChangeGuard review gate: reports on every pull request and fails the check when the risk is
+# HIGH or above, until a senior developer approves the latest commit.
+#
+# To make it block merging: Settings -> Branches -> add a rule for your main branch ->
+# "Require status checks to pass" -> select "ChangeGuard review gate".
+# Optional repository variable CHANGEGUARD_APPROVERS: comma-separated GitHub logins whose approval
+# clears the gate (default: any owner, member or collaborator other than the PR author).
+# Optional secret GEMINI_API_KEY: adds an AI investigation to the report.
+name: ChangeGuard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: changeguard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changeguard:
+    name: ChangeGuard review gate
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ChangeGuard
+        run: pip install "changeguard @ git+https://github.com/artham-bhardwaj/changeguard@improve-local-usability"
+      - name: Load evidence from .changeguard/evidence and docs/
+        run: changeguard evidence sync .
+      - name: Analyze pull request
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CHANGEGUARD_LLM_PROVIDER: gemini
+          CHANGEGUARD_APPROVERS: ${{ vars.CHANGEGUARD_APPROVERS }}
+        run: |
+          LLM=""
+          if [ -n "$GEMINI_API_KEY" ]; then LLM="--llm"; fi
+          set +e
+          changeguard pr analyze "${{ github.repository }}#${{ github.event.pull_request.number }}" \
+            $LLM --comment --output changeguard-report.md --fail-on high
+          status=$?
+          set -e
+          if [ -f changeguard-report.md ]; then cat changeguard-report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          # 0 = passed or approved, 4 = waiting for senior review, others = analysis error.
+          exit $status

@@ -290,6 +290,18 @@ def test_revoked_token_gives_reauthorisation_error(db, gs, fake):
     fake.fail[("POST", "/token")] = [(400, {"error": "invalid_grant", "error_description": "Token has been expired or revoked."})]
     with pytest.raises(gmail.GmailAuthError, match="gmail auth"):
         gmail.create_gmail_draft(db, gs, d, client(gs, fake))
+    # The expiry is remembered: status, readiness and health stop claiming the sign-in works.
+    st = gmail.status(gs)
+    assert st["authorized"] is False and "invalid_grant" in st["auth_error"]
+    assert not gmail.readiness(gs)["ready"]
+    assert any("Testing mode" in p for p in gmail.readiness(gs)["problems"])
+    from jobpilot.services import health
+    chk = health.check(gs, db)["checks"]["gmail"]
+    assert chk["ok"] is True and chk["warn"] is True and "sign-in expired" in chk["detail"]
+    assert health.check(gs, db)["ok"] is True  # the app (and its Docker health check) stays healthy
+    # Signing in again writes a fresh token and clears it.
+    gs.gmail_token_file.write_text(json.dumps({**tok, "expires_at": 9e12}))
+    assert gmail.status(gs)["authorized"] is True and gmail.auth_error(gs) is None
 
 
 def test_gmail_api_error_is_reported_not_swallowed(db, gs, fake, client_web):

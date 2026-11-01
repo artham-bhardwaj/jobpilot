@@ -39,7 +39,7 @@ def tracker_page(request: Request, db: Session = Depends(get_db)):
 def _back(form: dict) -> str:
     """Where to return after a tracker action: the tracker, a Jobs page or the Overview (local paths only)."""
     nxt = form.get("next") or "/tracker"
-    if nxt == "/" or (not nxt.startswith("//") and nxt.startswith(("/tracker", "/jobs"))):
+    if nxt == "/" or (not nxt.startswith("//") and nxt.startswith(("/tracker", "/jobs", "/desk"))):
         return nxt
     return "/tracker"
 

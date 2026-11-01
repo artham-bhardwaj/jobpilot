@@ -18,6 +18,14 @@ RUN pip install --no-deps /src && pip check && python -m compileall -q /opt/venv
 
 # ---- runtime ------------------------------------------------------------------------------------------------
 FROM ${PYTHON_IMAGE}
+# Tools JobPilot calls when present: LaTeX (tailored resume PDFs: latexmk + pdflatex, with the packages the resume
+# template uses) and poppler's pdftotext (resume import, tailored-resume page / clipping checks). Set
+# --build-arg WITH_LATEX=false for a ~200 MB image without tailored resumes.
+ARG WITH_LATEX=true
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils \
+       $( [ "$WITH_LATEX" = "true" ] && echo latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended ) \
+    && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
 ARG JOBPILOT_UID=10001
 ARG JOBPILOT_GID=10001
 ENV PATH=/opt/venv/bin:$PATH \
@@ -26,7 +34,9 @@ ENV PATH=/opt/venv/bin:$PATH \
     JOBPILOT_DATA_DIR=/data \
     JOBPILOT_HOST=0.0.0.0 \
     JOBPILOT_PORT=8765 \
-    JOBPILOT_ALLOW_REMOTE_BIND=true
+    JOBPILOT_ALLOW_REMOTE_BIND=true \
+    TEXMFVAR=/tmp/texmf-var \
+    TEXMFCONFIG=/tmp/texmf-config
 RUN groupadd --system --gid "${JOBPILOT_GID}" jobpilot \
     && useradd --system --uid "${JOBPILOT_UID}" --gid jobpilot --no-create-home --home-dir /nonexistent \
        --shell /usr/sbin/nologin jobpilot \

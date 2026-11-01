@@ -32,6 +32,8 @@ OFFSET_KEY = "telegram.offset"
 POLL_TIMEOUT = 25
 
 HELP = ("JobPilot\n"
+        "Type a normal message to ask Claude (when the assistant is running on your computer); /new starts over\n"
+        "/usage — your Claude plan limits and what the assistant has used\n"
         "/status — system health, last discovery, schedules\n"
         "/today — today's summary\n"
         "/jobs — top active relevant jobs\n"
@@ -521,6 +523,18 @@ def tracker_callback(session: Session, settings: Settings, parts: list[str]) -> 
     return "cb:unknown", "That button is not recognised. Nothing changed."
 
 
+def _assistant_new(settings: Settings) -> str:
+    from jobpilot.services import assistant
+
+    return assistant.new_conversation(settings)
+
+
+def _assistant_usage(settings: Settings) -> str:
+    from jobpilot.services import assistant
+
+    return assistant.usage_command(settings)
+
+
 ARG_COMMANDS = {"/answer": cmd_answer, "/company": cmd_company, "/cooldown": cmd_cooldown}
 
 MENU_TEXT = ("🧭 JobPilot\nTap a button. Views are read-only; changes happen only through Pause / Resume (outreach) "
@@ -528,6 +542,7 @@ MENU_TEXT = ("🧭 JobPilot\nTap a button. Views are read-only; changes happen o
              "everything else.")
 
 COMMANDS = {
+    "/new": lambda s, st: _assistant_new(st), "/usage": lambda s, st: _assistant_usage(st),
     "/start": lambda s, st: HELP, "/help": lambda s, st: HELP, "/menu": lambda s, st: MENU_TEXT, "/status": cmd_status,
     "/today": lambda s, st: notifications.daily_summary(s, st), "/jobs": cmd_jobs, "/pending": cmd_pending,
     "/applications": cmd_applications, "/pause": cmd_pause, "/resume": cmd_resume,
@@ -601,6 +616,11 @@ def handle_update(session: Session, settings: Settings, update: dict) -> tuple[s
         if m:  # your reply to an "Answer Q12" prompt is the answer to Q12 (same checks as /answer)
             return "answered", "/answer", cmd_answer(session, settings, f"Q{m.group(1)} {msg['text']}")
     if command is None:
+        from jobpilot.services import assistant
+
+        if assistant.worker_alive(settings):  # plain messages go to Claude (services/assistant.py)
+            assistant.enqueue(settings, msg["text"])
+            return "answered", "assistant", "🤖 Asking Claude…"
         return "answered", None, "I only understand commands. Send /menu for buttons, or /help."
     if command in ARG_COMMANDS:
         args = msg["text"].split(None, 1)[1] if len(msg["text"].split(None, 1)) > 1 else ""

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, empty %}
+{% block title %}Agents{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Agents</h1>
+  <p class="lede">Four agents do the applying: Search finds jobs, Resume tailors a resume for each one, Apply sends
+    or submits where it's safe, and the Manager runs them every {{ sched.every_hours or "few" }} hours. Anything
+    they can't do safely comes to you below, ready to go.</p></div>
+  <div class="actions">
+    <form method="post" action="/agents/run" class="inline"><button class="primary">Run a cycle now</button></form>
+  </div>
+</header>
+
+<section class="agent-status {{ 'auto' if pol.apply_mode == 'auto' and not paused else 'dry' }}" aria-label="Status">
+  <div class="st">
+    <div class="step-t">Apply mode</div>
+    {% if paused %}<b class="mode paused">⏸ Paused</b><div class="small muted">Nothing is sent or submitted. Search and resumes continue.</div>
+    {% elif pol.apply_mode == "auto" %}<b class="mode on">● Applying automatically</b><div class="small muted">Within {{ pol.daily_limit }} a day, only where safe.</div>
+    {% else %}<b class="mode">◌ Dry run</b><div class="small muted">Everything except sending and submitting.</div>{% endif %}
+  </div>
+  <div class="st"><div class="step-t">Today</div><b class="big">{{ today }} / {{ pol.daily_limit }}</b><div class="small muted">applications sent</div></div>
+  <div class="st"><div class="step-t">Next cycle</div><b>{{ next_run|dt if next_run else "scheduler task off" }}</b>
+    <form method="post" action="/agents/schedule" class="inline sched-form">
+      {% if sched.enabled %}<span class="small muted">every {{ sched.every_hours }} h</span>
+        <input type="hidden" name="enabled" value="0"><button class="small">Turn off</button>
+      {% else %}<input type="hidden" name="enabled" value="1">
+        <label class="small">every <input type="number" name="every_hours" min="1" max="24" value="{{ sched.every_hours or 3 }}" class="tiny"> h</label>
+        <button class="small primary">Turn on</button>{% endif %}
+    </form></div>
+  <div class="st grow">
+    <div class="step-t">Controls</div>
+    <div class="actions" style="margin-top:0">
+      {% if pol.apply_mode == "auto" %}
+        <form method="post" action="/agents/mode" class="inline"><input type="hidden" name="mode" value="dry_run"><button class="small">Back to dry run</button></form>
+      {% else %}
+        <form method="post" action="/agents/mode" class="inline auto-form"><input type="hidden" name="mode" value="auto">
+          <label class="checkbox small"><input type="checkbox" name="confirm" value="1" required> send real applications</label>
+          <button class="small primary">Switch to automatic</button></form>
+      {% endif %}
+      <form method="post" action="/agents/pause" class="inline"><input type="hidden" name="action" value="{{ 'resume' if paused else 'pause' }}">
+        <button class="small">{{ "▶ Resume" if paused else "⏸ Pause" }}</button></form>
+    </div>
+  </div>
+</section>
+
+<h2 class="section-title">Needs you ({{ items|length }})</h2>
+{% if items %}
+<ul class="needs-list">
+  {% for it in items %}{% set a = apps.get(it.entity_id) %}{% set d = it.data or {} %}
+  <li>
+    <div class="needs-main">
+      <a href="/jobs/{{ d.job_id }}#apply"><b>{{ a.job.title if a else it.title }}</b></a>
+      <span class="muted small">· {{ (a.job.company_name if a else "") or "?" }}</span>
+      {{ badge({"dream_company": "dream company", "form": "form", "uncertain": "check result", "other": "apply yourself"}.get(d.code, d.code or "needs you"), "b-warn") }}
+      <div class="small">{{ it.reason }}</div>
+      {% if cmds.get(it.id) %}<div class="cmd"><code id="cmd-{{ it.id }}">{{ cmds[it.id] }}</code>
+        <button class="small" type="button" data-copy="cmd-{{ it.id }}">Copy</button></div>{% endif %}
+    </div>
+    <div class="row-actions">
+      {% if d.url %}<a class="button small primary" href="{{ d.url }}" target="_blank" rel="noopener noreferrer">apply ↗</a>{% endif %}
+      <a class="button small" href="/jobs/{{ d.job_id }}#apply">resume / I applied</a>
+      <form method="post" action="/agents/items/{{ it.id }}" class="inline"><input type="hidden" name="action" value="dismiss"><button class="small" title="Hide this; the agents won't pick this job again until the application changes">dismiss</button></form>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}{{ empty("Nothing needs you right now.") }}{% endif %}
+
+<h2 class="section-title">What each agent did last</h2>
+<div class="agent-grid">
+  {% for key, name, desc in info %}{% set r = reports.get(key) %}
+  <section class="card agent-card">
+    <h3>{{ name }} agent</h3>
+    <p class="small muted">{{ desc }}</p>
+    {% if r %}
+      <p class="small"><span class="muted">{{ r.at|replace("T", " ") }} UTC</span><br><b>{{ r.summary or "—" }}</b></p>
+      {% if r["items"] %}<ul class="agent-items small">
+        {% for i in r["items"][:8] %}<li><span class="badge {{ 'b-ok' if i.outcome in ('applied_email', 'applied_form', 'tailored', 'boards_added', 'sources_added') else ('b-warn' if i.outcome in ('needs_you', 'master', 'deferred', 'would_email', 'would_submit') else 'b-none') }}">{{ i.outcome|replace("_", " ") }}</span>
+          {% if i.title %}<a href="/jobs/{{ i.job_id }}">{{ i.title }}</a> <span class="muted">· {{ i.company or "?" }}</span>{% endif %}
+          <div class="muted">{{ i.detail[:220] }}</div></li>{% endfor %}
+      </ul>{% if r["items"]|length > 8 %}<p class="small muted">… and {{ r["items"]|length - 8 }} more</p>{% endif %}{% endif %}
+      {% for e in r.errors or [] %}<div class="notice warn small">{{ e }}</div>{% endfor %}
+    {% else %}<p class="small muted">Not run yet.</p>{% endif %}
+    {% if key != "manager" %}<form method="post" action="/agents/run" class="inline"><input type="hidden" name="only" value="{{ key }}"><button class="small">Run {{ name }} only</button></form>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+
+<details class="card" id="policy">
+  <summary><b>Policy</b> <span class="muted small">· score ≥ {{ pol.min_score|round|int }}, {{ pol.allowed_eligibility|join(", ") }}, {{ pol.max_per_cycle }} per cycle, {{ pol.daily_limit }} per day</span></summary>
+  <form method="post" action="/agents/policy" class="form-grid" style="margin-top:var(--s3)">
+    <label class="field"><span>Minimum score</span><input type="number" name="min_score" min="0" max="100" value="{{ pol.min_score|round|int }}"></label>
+    <label class="field"><span>Applications per day</span><input type="number" name="daily_limit" min="0" max="40" value="{{ pol.daily_limit }}"></label>
+    <label class="field"><span>Jobs per cycle</span><input type="number" name="max_per_cycle" min="1" max="25" value="{{ pol.max_per_cycle }}"></label>
+    <fieldset class="field"><span>Eligibility</span>
+      {% for e in ["eligible", "likely_eligible", "unknown"] %}<label class="checkbox small"><input type="checkbox" name="allowed_eligibility" value="{{ e }}" {% if e in pol.allowed_eligibility %}checked{% endif %}> {{ e|replace("_", " ") }}</label>{% endfor %}</fieldset>
+    <fieldset class="field full"><span>Channels and search</span>
+      {% for k, l in [("email_applications", "Apply by email when the posting asks for it"), ("form_submissions", "Submit Greenhouse / Lever / Ashby forms when safe"), ("hold_dream_companies", "Keep dream companies for me to review"), ("job_alert_emails", "Read job-alert emails (LinkedIn, Naukri, Indeed…)"), ("discover_boards", "Find and add companies' own job boards")] %}
+      <label class="checkbox small"><input type="checkbox" name="{{ k }}" value="1" {% if pol[k] %}checked{% endif %}> {{ l }}</label>{% endfor %}</fieldset>
+    <div class="actions full"><button class="primary">Save policy</button> <a class="small" href="/settings">All settings →</a></div>
+  </form>
+</details>
+
+<p class="small muted">What they never do: get past a CAPTCHA, bot check or login; tick a consent, privacy or legal
+  box; answer a question without your approved answer; claim a skill or fact you haven't confirmed; resubmit an
+  application whose result was unclear. Telegram <code>/pause</code> stops all sending at once.</p>
+{% endblock %}

@@ -148,6 +148,11 @@ retries, and records each source's last result. Jobs that disappear from a board
 **expired**; when the same company/title/location reappears later it's flagged as a **repost**.
 Duplicates across sources are merged and every sighting is kept as provenance.
 
+**Export to share**: **Export PDF** and **Export Excel** on the Jobs page and the Job desk download every job the
+page currently shows with its filters, search and tab (all pages, up to 5,000), with job title, company, location
+and apply link. Links are clickable in both files; only `http(s)` links are included. Nothing else from your
+profile, scores or notes goes into the file.
+
 ## 4. Matching
 
 Each job gets:
@@ -211,8 +216,9 @@ From a job page click **Start application**. The pipeline:
   submit**: you review and click Submit yourself. If a confirmation page appears, its text and a screenshot are saved
   as candidate evidence. Other sites: the page opens and you use the manual workflow (copyable confirmed details on
   the application page). This is the way through forms with a bot check (all Greenhouse boards checked).
-- JobPilot never submits applications for you: the automatic-application feature (autopilot) and its form rehearsal
-  were removed on 2026-10-23.
+- The **Apply agent** (Agents page, [AGENTS.md](AGENTS.md)) submits forms on its own only in automatic mode and only
+  when there is no CAPTCHA, bot check, login or legal question and every answer is approved; the assisted window
+  above never clicks Submit.
 
 ### My tracker (applications you make yourself)
 

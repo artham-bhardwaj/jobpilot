@@ -233,6 +233,49 @@ async def draft_create(request: Request, db: Session = Depends(get_db)):
     return redirect(f"/drafts/{d.id}", msg="Draft created — review and edit before approving")
 
 
+# ---- Drafts from a pasted LinkedIn hiring post -----------------------------------
+
+@router.get("/drafts/from-post")
+def hiring_post_page(request: Request):
+    return render(request, "hiring_post.html", form={}, parsed=None)
+
+
+@router.post("/drafts/from-post/parse")
+async def hiring_post_parse(request: Request):
+    from jobpilot.services import hiring_posts as hp
+
+    form = await form_dict(request)
+    text = (form.get("post_text") or "").strip()
+    if len(text) < 20:
+        return render(request, "hiring_post.html", form=form, parsed=None, err="Paste the whole post text first",
+                      status_code=400)
+    try:
+        hp.clean_post_url(form.get("post_url"))
+    except ValueError as exc:
+        return render(request, "hiring_post.html", form=form, parsed=None, err=str(exc), status_code=400)
+    parsed = hp.parse_post(text)
+    template = "hiring_manager" if parsed["role_type"] == "hiring_manager" else "recruiter_outreach"
+    return render(request, "hiring_post.html", parsed=parsed,
+                  form={**parsed, "post_text": text, "post_url": form.get("post_url"), "template_key": template})
+
+
+@router.post("/drafts/from-post")
+async def hiring_post_create(request: Request, db: Session = Depends(get_db)):
+    from jobpilot.services import hiring_posts as hp
+
+    form = await form_dict(request)
+    form["email_in_post"] = bool(form.get("email_in_post"))
+    try:
+        res = hp.create_lead(db, hp.PostLeadIn.model_validate(form))
+    except (ValidationError, ValueError) as exc:
+        db.rollback()
+        parsed = hp.parse_post(form.get("post_text") or "")
+        return render(request, "hiring_post.html", form=form, parsed=parsed, err=first_error(exc), status_code=400)
+    if res["draft"] is not None:
+        return redirect(f"/drafts/{res['draft'].id}", msg="Lead saved and email drafted. Review it, then approve and send")
+    return redirect(f"/jobs/{res['job'].id}", msg="Lead saved. The post has no email address: message the poster on LinkedIn")
+
+
 @router.get("/drafts/{draft_id:int}")
 def draft_detail(draft_id: int, request: Request, db: Session = Depends(get_db)):
     d = get_or_404(db, EmailDraft, draft_id)

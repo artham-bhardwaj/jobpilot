@@ -70,12 +70,13 @@ def test_jobs_manual_import_and_explorer(client, db):
     page = client.get(f"/jobs/{job.id}").text
     assert "Relevance" in page and "Eligibility" in page and "No approved resume" in page
     listing = client.get("/jobs?q=java&sort=newest").text
-    assert "Java Backend Engineer" in listing and "Java Developer" in listing
+    assert "<mark>Java</mark> Backend Engineer" in listing and "<mark>Java</mark> Developer" in listing
     assert "SDE 1" not in client.get("/jobs?q=hibernate").text
     assert "SDE 1" in client.get("/jobs?remote=remote").text
     _ok(client.post(f"/jobs/{job.id}/status", data={"status": "dismissed"}))
-    assert "<b>Java Backend Engineer</b>" not in client.get("/jobs").text
-    assert "<b>Java Backend Engineer</b>" in client.get("/jobs?user_status=dismissed").text
+    title = '<a class="job-title" href="/jobs/%d">Java Backend Engineer</a>' % job.id
+    assert title not in client.get("/jobs?region=any&level=any&roles=any").text
+    assert title in client.get("/jobs?region=any&level=any&roles=any&user_status=dismissed").text
     _ok(client.post("/jobs/rematch"))
     assert client.get("/jobs/new").status_code == 200
 

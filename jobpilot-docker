@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# JobPilot in Docker, in one command. Uses this repository's ./data folder (your database, resumes, Gmail token),
+# so nothing has to be exported or imported, and you can switch back to the native install at any time.
+#
+#   ./jobpilot-docker start          build if needed, start, wait until healthy, print the address
+#   ./jobpilot-docker stop           stop (scheduler and Telegram stop cleanly)
+#   ./jobpilot-docker restart | status | logs [-f] | update
+#   ./jobpilot-docker cli <args>     run a jobpilot command inside, e.g.  ./jobpilot-docker cli doctor
+#   ./jobpilot-docker switch-to-docker   stop + disable the native systemd service, back up, then start Docker
+#   ./jobpilot-docker switch-to-native   stop Docker, re-enable the native service
+#
+# Only one JobPilot may run on the same data / Telegram bot at a time; `start` refuses while the native service
+# is running or enabled (it would start again at login and both would collect, notify and poll twice).
+set -euo pipefail
+
+cd "$(dirname "$(readlink -f "$0")")"
+ROOT=$PWD
+SERVICE=jobpilot.service
+PORT=${JOBPILOT_HOST_PORT:-8765}
+URL="http://127.0.0.1:$PORT"
+
+export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-jobpilot}
+export JOBPILOT_DATA_SOURCE=${JOBPILOT_DATA_SOURCE:-$ROOT/data}
+export JOBPILOT_UID=${JOBPILOT_UID:-$(id -u)} JOBPILOT_GID=${JOBPILOT_GID:-$(id -g)}
+export JOBPILOT_HOST_PORT=$PORT
+
+say()  { printf '\033[1m%s\033[0m\n' "$*"; }
+die()  { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
+dc()   { docker compose "$@"; }
+
+need_docker() {
+    command -v docker >/dev/null || die "Docker is not installed (https://docs.docker.com/engine/install/)."
+    docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is missing (the 'docker compose' plugin)."
+    docker info >/dev/null 2>&1 || die "Can't talk to Docker. Is it running, and are you in the 'docker' group?"
+}
+
+native_state() {  # prints "active", "enabled" or nothing
+    command -v systemctl >/dev/null || return 0
+    if systemctl --user is-active --quiet "$SERVICE" 2>/dev/null; then echo active
+    elif systemctl --user is-enabled --quiet "$SERVICE" 2>/dev/null; then echo enabled; fi
+}
+
+# .env.docker: the example file, overlaid with your native .env (Telegram, Gmail, scheduler switches). Paths, host
+# and port are fixed by compose.yaml, so those keys are never copied. Values are never printed.
+ensure_env() {
+    [ -n "${JOBPILOT_ENV_FILE_DOCKER:-}" ] && { [ -f "$JOBPILOT_ENV_FILE_DOCKER" ] || die "$JOBPILOT_ENV_FILE_DOCKER not found"; return 0; }
+    [ -f .env.docker ] && return 0
+    say "Creating .env.docker (private, git-ignored) from .env.docker.example and your .env"
+    umask 077
+    cp .env.docker.example .env.docker
+    if [ -f .env ]; then
+        awk -F= '
+            FNR == NR { if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && $1 !~ /^JOBPILOT_(DATA_DIR|DATABASE_URL|HOST|PORT|ALLOW_REMOTE_BIND)$/) { k[$1] = $0; order[++n] = $1 } next }
+            /^[A-Za-z_][A-Za-z0-9_]*=/ && ($1 in k) { print k[$1]; done[$1] = 1; next }
+            { print }
+            END { for (i = 1; i <= n; i++) if (!(order[i] in done)) print k[order[i]] }
+        ' .env .env.docker.example > .env.docker
+    fi
+    # The image has no Chrome: browser-assisted applying stays with the native install.
+    sed -i 's/^JOBPILOT_BROWSER_ENABLED=.*/JOBPILOT_BROWSER_ENABLED=false/' .env.docker
+    local tz
+    tz=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)
+    [ -n "$tz" ] && sed -i "s|^TZ=.*|TZ=$tz|" .env.docker
+    chmod 600 .env.docker
+}
+
+wait_healthy() {
+    say "Waiting for JobPilot to become healthy (up to ~2 minutes)…"
+    local id state
+    id=$(dc ps -q jobpilot)
+    for _ in $(seq 1 60); do
+        state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id" 2>/dev/null || echo gone)
+        case $state in
+            healthy) say "JobPilot is running: $URL"; return 0 ;;
+            unhealthy|exited|dead|gone) dc logs --tail 40 jobpilot; die "container is $state (logs above)" ;;
+        esac
+        sleep 3
+    done
+    dc logs --tail 40 jobpilot
+    die "still not healthy; see '$0 logs'"
+}
+
+cmd_start() {
+    need_docker
+    # A separate copy (other data folder AND other env file) may run next to the native install; your real data may not.
+    local shared=yes
+    [ "$JOBPILOT_DATA_SOURCE" != "$ROOT/data" ] && [ -n "${JOBPILOT_ENV_FILE_DOCKER:-}" ] && shared=no
+    [ $shared = yes ] && case $(native_state) in
+        active)  die "the native JobPilot service is running on this data. Use '$0 switch-to-docker' (or stop it: systemctl --user disable --now $SERVICE)." ;;
+        enabled) die "the native JobPilot service is enabled and would start again at login. Use '$0 switch-to-docker' (or: systemctl --user disable $SERVICE)." ;;
+    esac
+    [ -d "$JOBPILOT_DATA_SOURCE" ] || { mkdir -p "$JOBPILOT_DATA_SOURCE"; chmod 700 "$JOBPILOT_DATA_SOURCE"; }
+    [ -w "$JOBPILOT_DATA_SOURCE" ] || die "$JOBPILOT_DATA_SOURCE is not writable by uid $JOBPILOT_UID"
+    ensure_env
+    if ! dc ps --status running -q jobpilot 2>/dev/null | grep -q . \
+        && (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+        die "port $PORT is already in use. Pick another: JOBPILOT_HOST_PORT=8766 $0 start"
+    fi
+    say "Building and starting JobPilot (first build takes a few minutes)…"
+    dc up -d --build
+    wait_healthy
+}
+
+cmd_switch_to_docker() {
+    need_docker
+    if [ -n "$(native_state)" ]; then
+        read -r -p "Stop and disable the native JobPilot service ($SERVICE) and run JobPilot in Docker instead? [y/N] " a
+        [[ $a =~ ^[Yy] ]] || die "cancelled"
+        systemctl --user disable --now "$SERVICE"
+        if [ -x .venv/bin/jobpilot ]; then
+            say "Backing up before the switch…"
+            .venv/bin/jobpilot backup create --label to-docker | tail -1
+        fi
+    fi
+    cmd_start
+}
+
+cmd_switch_to_native() {
+    need_docker
+    say "Stopping Docker JobPilot…"
+    dc stop
+    systemctl --user enable --now "$SERVICE"
+    say "Native JobPilot is running again: $URL"
+}
+
+case ${1:-help} in
+    start)            cmd_start ;;
+    stop)             need_docker; dc stop; say "Stopped." ;;
+    restart)          need_docker; dc restart; wait_healthy ;;
+    status)           need_docker; dc ps; curl -fsS "$URL/health" 2>/dev/null && echo || echo "(not answering on $URL)" ;;
+    logs)             need_docker; shift; dc logs --tail 100 "$@" jobpilot ;;
+    update)           need_docker; dc exec jobpilot jobpilot backup create --label pre-update | tail -1 || true
+                      dc up -d --build; wait_healthy ;;
+    cli)              need_docker; shift; dc exec jobpilot jobpilot "$@" ;;
+    switch-to-docker) cmd_switch_to_docker ;;
+    switch-to-native) cmd_switch_to_native ;;
+    help|-h|--help)   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *)                die "unknown command '$1' (try: $0 help)" ;;
+esac

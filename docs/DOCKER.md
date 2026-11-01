@@ -1,5 +1,33 @@
 # Running JobPilot in Docker
 
+## The easy way: `./jobpilot-docker`
+
+```bash
+./jobpilot-docker switch-to-docker   # once: stop + disable the native service (asks), back up, start Docker
+./jobpilot-docker start              # build if needed, start, wait until healthy → http://127.0.0.1:8765
+./jobpilot-docker stop               # clean stop (scheduler waits for a running task)
+./jobpilot-docker logs -f            # follow the log;  status: container + /health
+./jobpilot-docker update             # backup, rebuild from the current code, restart (migrations run on start)
+./jobpilot-docker cli doctor         # any jobpilot command inside the container
+./jobpilot-docker switch-to-native   # stop Docker, re-enable the native systemd service
+```
+
+- **Your data, not a copy:** the container mounts this repository's `data/` folder (database, resumes, backups,
+  Gmail token) and runs as your own user, so files stay yours and switching back and forth needs no export / import.
+  `JOBPILOT_DATA_SOURCE=/other/dir` uses another folder.
+- **Settings:** on first start `.env.docker` (git-ignored, mode 600) is made from `.env.docker.example` plus your
+  `.env` (Telegram, Gmail, scheduler); paths, host and port are never copied, `TZ` is your host's time zone and
+  browser-assisted applying is switched off. Edit `.env.docker` and `./jobpilot-docker restart` to change them.
+- **One JobPilot at a time:** `start` refuses while the native service is running *or enabled* (it would come back
+  at login and both would collect, notify and poll Telegram). A separate test copy may run next to it when both the
+  data folder and the env file differ:
+  `JOBPILOT_DATA_SOURCE=/tmp/jp-data JOBPILOT_ENV_FILE_DOCKER=/tmp/jp.env JOBPILOT_HOST_PORT=18765 COMPOSE_PROJECT_NAME=jobpilot-test ./jobpilot-docker start`.
+- **In the image:** LaTeX (`latexmk`, `pdflatex`, the packages the resume template uses) and `pdftotext`, so tailored
+  resumes and their checks work. Not included: Chrome / Playwright (browser-assisted applications, the Apply agent's
+  form submission). `docker build --build-arg WITH_LATEX=false` builds the ~200 MB image without LaTeX.
+
+The rest of this page is the manual / server set-up the script wraps.
+
 Docker is an **additional** deployment option, for hosting JobPilot on a server later. On your laptop, the native
 install (`.venv` + the `jobpilot.service` systemd user service) remains the recommended mode. Both run the same
 code; only paths and binding differ.
@@ -13,7 +41,7 @@ code; only paths and binding differ.
 - One container, one process: `jobpilot serve` (dashboard + internal scheduler + Telegram poller, exactly as in
   native mode). No extra scheduler, worker, Redis or Celery.
 - `python:3.12.14-slim-trixie`, pinned by digest; runtime dependencies pinned in `docker/requirements.lock`
-  (the versions the test suite passes with). About 200 MB.
+  (the versions the test suite passes with). About 200 MB, plus LaTeX (see above).
 - Runs as the unprivileged user `jobpilot` (uid/gid 10001), read-only root filesystem, all capabilities dropped,
   `no-new-privileges`, `/tmp` as a 256 MB tmpfs.
 - `init: true` forwards `docker stop`'s SIGTERM to JobPilot, which stops the scheduler (waiting for a running task)
@@ -22,8 +50,8 @@ code; only paths and binding differ.
 - `restart: unless-stopped`: restarted after a crash or reboot, not after you stop it.
 - Health check: the app's own `/health` (database, migrations, scheduler pass not overdue, integrations).
   An unhealthy container is reported (`docker ps`), not restarted automatically.
-- Not included: Google Chrome/Playwright (browser-assisted applications and PDF resume rendering) and
-  `pdftotext` (resume import falls back to pypdf, with a warning). Use the native install for those.
+- Included: LaTeX and `pdftotext` (tailored resumes, resume import). Not included: Google Chrome/Playwright
+  (browser-assisted applications). Use the native install for those.
 
 ## Persistent data and secrets
 

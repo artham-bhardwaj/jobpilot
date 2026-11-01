@@ -23,7 +23,9 @@ There is no bulk sending, and sending is capped per day (Settings → outreach �
 2. **APIs & Services → Library**: enable **Gmail API**.
 3. **OAuth consent screen** (Google Auth Platform): user type **External**, any app name, your
    email as support/developer contact. Under **Audience → Test users**, add your Gmail address.
-   Leave the app in **Testing**.
+   Then, under **Audience**, click **Publish app** (status **In production**). Apps left in **Testing**
+   lose their sign-in every 7 days. A personal app does not need Google's verification: you will just see
+   the "unverified app" warning when you sign in.
 4. **Data access / Scopes**: add `.../auth/gmail.compose` and `.../auth/gmail.metadata` (or
    `.../auth/gmail.readonly` if you will enable body access).
 5. **Clients → Create client → Application type: Desktop app**. Download the JSON.
@@ -39,8 +41,9 @@ There is no bulk sending, and sending is capped per day (Settings → outreach �
 
 Notes:
 
-- Google expires refresh tokens for apps in *Testing* status after about 7 days. Re-run
-  `jobpilot gmail auth` when JobPilot reports the token expired.
+- Google expires refresh tokens for apps in *Testing* status after about 7 days. If sending and reply checks stop
+  with "invalid_grant" / "sign-in expired" (shown in `jobpilot gmail status`, Settings → Gmail and System health),
+  publish the app (step 3) and run `jobpilot gmail auth` again. Signing in again clears the error.
 - Changing `JOBPILOT_GMAIL_ALLOW_READ_BODIES` requires re-running `jobpilot gmail auth`.
 - Disconnect anytime: `jobpilot gmail revoke` (revokes and deletes the token).
 

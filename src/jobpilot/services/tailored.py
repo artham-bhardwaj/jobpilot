@@ -553,6 +553,23 @@ def tailor(session: Session, settings: Settings, job: Job, tex: str | None = Non
     have = set(confirmed)
     decisions["not_claimed"] = sorted(set(js["required"] + js["preferred"]) - have)
     out = doc.render()
+    # Rewording: the posting's spelling of skills you already list (pure synonyms only; see services/wording.py).
+    decisions["rewording"] = []
+    if cfg(session).get("reword_skills", True) and job.description_text:
+        from jobpilot.services import wording
+
+        cut = out.find("\\begin{document}")
+        head, body = (out[:cut], out[cut:]) if cut >= 0 else ("", out)
+        swaps = wording.plan(plain(body), f"{job.title or ''}\n{job.description_text}")
+        if swaps:
+            body, done = wording.apply(body, swaps)
+            out = head + body
+            corrections.extend(done)
+            expected = [wording.apply(e, swaps)[0] for e in expected]
+            counts: dict[tuple[str, str], int] = {}
+            for pair in done:
+                counts[pair] = counts.get(pair, 0) + 1
+            decisions["rewording"] = [{"from": a, "to": b, "count": n} for (a, b), n in counts.items()]
     return {"tex": out, "decisions": decisions, "expected": expected, "excluded": decisions["excluded"],
             "excluded_full": excluded_full, "corrections": corrections,
             "header": plain(doc.preamble[doc.preamble.find("\\begin{document}"):])}
@@ -922,3 +939,18 @@ def as_dict(tr: TailoredResume) -> dict[str, Any]:
             "pages": tr.page_count, "source_version_id": tr.source_version_id, "created_at": tr.created_at,
             "validated_at": tr.validated_at, "attached_application_id": tr.attached_application_id,
             "attached_at": tr.attached_at, "error": tr.error}
+
+
+def latex_source(session: Session, settings: Settings, tr: TailoredResume) -> str:
+    """The LaTeX source of a tailored resume. Only the PDF is stored, but tailoring is deterministic: rebuild it from
+    the same template, facts and job, and check it is exactly the source that was compiled (content checksum)."""
+    job = session.get(Job, tr.job_id)
+    if job is None or not tr.content_sha256:
+        raise TailorError("This resume's job or source record is gone; create a new resume")
+    tex, info, _ = load_template(session, settings)
+    if info["sha256"] != tr.template_sha256:
+        raise TailorError("Your Master resume changed since this one was made; create a new resume")
+    rendered = tailor(session, settings, job, tex)["tex"]
+    if _sha(rendered) != tr.content_sha256:
+        raise TailorError("The job or your profile changed since this resume was made; create a new resume")
+    return rendered

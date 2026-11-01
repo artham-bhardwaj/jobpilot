@@ -8,18 +8,32 @@ applications and recruiter outreach, tracks interviews, and reports results.
 
 - Runs entirely on your machine (FastAPI + SQLite). No paid services, no AI APIs, no API keys.
 - Never invents facts: only information you confirm is used in scores, resumes, emails and forms.
-- Never submits applications or sends email on its own. Every consequential step waits for you.
+- Four rule-based agents (Search, Resume, Apply, Manager; [docs/AGENTS.md](docs/AGENTS.md)) can apply for you: by
+  email when a posting asks for it, and on Greenhouse / Lever / Ashby forms only when there is no CAPTCHA, bot check,
+  login or legal question. They start in dry-run mode; everything they can't do safely waits for you.
 - Optional: Gmail drafts/sending/reply detection ([docs/GMAIL_SETUP.md](docs/GMAIL_SETUP.md)) and Telegram
   notifications plus read-only commands ([docs/TELEGRAM.md](docs/TELEGRAM.md)), both free.
 - Finds jobs in India, remote jobs open to India or the UAE, and jobs in Dubai / UAE, with region tabs on the Jobs page
-  and a region overview on the dashboard ([howtouse.md](howtouse.md) §9). It never applies to jobs for you.
+  and a region overview on the dashboard ([howtouse.md](howtouse.md) §9).
 - Tailored resumes for any job, made only when you ask on the job's page
   ([docs/TAILORED_RESUMES.md](docs/TAILORED_RESUMES.md)).
-- Optional Docker image for future hosting ([docs/DOCKER.md](docs/DOCKER.md)); the native install stays the
-  recommended way to run it on your laptop.
+- Runs in Docker with one command, on your existing data: `./jobpilot-docker start`
+  ([docs/DOCKER.md](docs/DOCKER.md)). Browser-assisted applying still needs the native install.
 
 > JobPilot only sees jobs from the sources you add (company boards, career pages, imports).
 > It does not and cannot cover the whole internet.
+
+## Quick start with Docker
+
+```bash
+./jobpilot-docker switch-to-docker   # first time: stops the native service (asks first), backs up, starts Docker
+./jobpilot-docker start              # afterwards; then open http://127.0.0.1:8765
+./jobpilot-docker stop | logs -f | status | update | cli doctor
+./jobpilot-docker switch-to-native   # go back to the native install
+```
+
+It uses this folder's `data/` and copies your `.env` settings into a private `.env.docker`. Details:
+[docs/DOCKER.md](docs/DOCKER.md).
 
 ## Requirements
 

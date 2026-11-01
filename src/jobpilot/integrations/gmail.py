@@ -79,6 +79,16 @@ class GmailNetworkError(GmailError):
         self.ambiguous = ambiguous
 
 
+AUTH_EXPIRED_MSG = ("Gmail access was revoked or has expired (Google: invalid_grant). Run `jobpilot gmail auth` "
+                    "again. If this happens every 7 days, your Google Cloud OAuth app is still in Testing mode: "
+                    "publish it (docs/GMAIL_SETUP.md).")
+
+
+def auth_error(settings: Settings) -> str | None:
+    """Why the stored authorisation no longer works (Google rejected its refresh token), or None."""
+    return (_load_token(settings) or {}).get("auth_error")
+
+
 def scopes(settings: Settings) -> list[str]:
     return [SCOPE_COMPOSE, SCOPE_READONLY if settings.gmail_allow_read_bodies else SCOPE_METADATA]
 
@@ -90,7 +100,8 @@ def is_ready(settings: Settings) -> bool:
 def status(settings: Settings) -> dict[str, Any]:
     tok = _load_token(settings) if settings.gmail_token_file.exists() else None
     return {"enabled": settings.gmail_enabled, "client_secrets": settings.gmail_secrets_file.exists(),
-            "client_secrets_path": str(settings.gmail_secrets_file), "authorized": tok is not None,
+            "client_secrets_path": str(settings.gmail_secrets_file),
+            "authorized": tok is not None and not tok.get("auth_error"), "auth_error": (tok or {}).get("auth_error"),
             "granted_scopes": (tok or {}).get("scope", "").split(), "email": (tok or {}).get("email"),
             "requested_scopes": scopes(settings), "read_bodies": settings.gmail_allow_read_bodies,
             **{f"ready_{k}": v for k, v in readiness(settings).items()}}
@@ -222,8 +233,11 @@ class GmailClient:
                                timeout=TIMEOUT)
             if r.status_code != 200:
                 if "invalid_grant" in r.text:
-                    raise GmailAuthError("Token refresh failed: Gmail access was revoked or has expired (Google: "
-                                         "invalid_grant). Run `jobpilot gmail auth` again.")
+                    # Remember it, so status / readiness / health stop saying "authorized" until the next sign-in
+                    # (exchange_code writes a fresh token without this flag).
+                    _write_secret(self.settings.gmail_token_file,
+                                  {**tok, "auth_error": AUTH_EXPIRED_MSG, "auth_error_at": time.time()})
+                    raise GmailAuthError("Token refresh failed: " + AUTH_EXPIRED_MSG)
                 raise GmailAuthError(f"Token refresh failed (HTTP {r.status_code}). Run `jobpilot gmail auth` again.")
             new = r.json()
             tok.update({"access_token": new["access_token"], "expires_at": time.time() + int(new.get("expires_in", 3600))})
@@ -412,6 +426,8 @@ def readiness(settings: Settings) -> dict[str, Any]:
         problems.append(f"OAuth client file missing at {settings.gmail_secrets_file}")
     if not settings.gmail_token_file.exists():
         problems.append("not authorised yet: run `jobpilot gmail auth`")
+    elif auth_error(settings):
+        problems.append(auth_error(settings))
     else:
         granted = granted_scopes(settings)
         if granted is not None and not _has_scope(granted, SCOPE_COMPOSE):
@@ -419,8 +435,30 @@ def readiness(settings: Settings) -> dict[str, Any]:
     return {"ready": not problems, "problems": problems}
 
 
+def _tailored_bytes(settings: Settings, draft: EmailDraft) -> tuple[bytes, str, str]:
+    """The draft's validated tailored resume PDF, checked against its recorded checksum."""
+    from sqlalchemy.orm import object_session
+
+    from jobpilot.models import TailoredResume
+
+    session = object_session(draft)
+    tr = session.get(TailoredResume, draft.tailored_resume_id) if session is not None else None
+    if tr is None or tr.status != "valid" or not tr.pdf_path:
+        raise GmailError("The tailored resume for this draft is missing or no longer valid; not attaching it.")
+    path = settings.files_dir / tr.pdf_path
+    if not path.is_file():
+        raise GmailError(f"The tailored resume file {tr.pdf_path} is missing; not attaching it.")
+    data = path.read_bytes()
+    if tr.pdf_sha256 and hashlib.sha256(data).hexdigest() != tr.pdf_sha256:
+        raise GmailError("The tailored resume file does not match its recorded checksum; not attaching it.")
+    return data, path.name, "application/pdf"
+
+
 def _resume_bytes(settings: Settings, draft: EmailDraft) -> tuple[bytes, str, str] | None:
-    """(bytes, filename, content type) of the draft's own resume version, or None if it has none."""
+    """(bytes, filename, content type) of the draft's resume: its validated tailored resume if it has one, otherwise
+    its own resume version, or None if it has neither."""
+    if getattr(draft, "tailored_resume_id", None):
+        return _tailored_bytes(settings, draft)
     v = draft.resume_version
     if v is None:
         return None
@@ -457,7 +495,8 @@ def build_message(settings: Settings, draft: EmailDraft, from_addr: str | None) 
         maintype, subtype = ctype.split("/", 1)
         msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
         attachment = {"filename": filename, "content_type": ctype, "size": len(data),
-                      "sha256": hashlib.sha256(data).hexdigest(), "resume_version_id": draft.resume_version_id}
+                      "sha256": hashlib.sha256(data).hexdigest(), "resume_version_id": draft.resume_version_id,
+                      "tailored_resume_id": getattr(draft, "tailored_resume_id", None)}
     content = json.dumps([draft.to_address, draft.subject, draft.body, (attachment or {}).get("sha256")])
     return _b64url(msg.as_bytes()), attachment, hashlib.sha256(content.encode()).hexdigest()
 

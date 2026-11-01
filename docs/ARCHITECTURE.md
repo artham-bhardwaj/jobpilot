@@ -35,7 +35,8 @@ is optional and disabled by default.
 | `services/` | All business rules. Functions take an explicit `Session`; routes and CLI are thin |
 | `sources/` | Job-source adapters behind a common `JobSource` interface; polite HTTP client (timeouts, bounded retries, per-host rate limit, robots.txt) |
 | `integrations/` | Optional Gmail client (manual OAuth installed-app flow over `requests`) |
-| `automation/` | Optional Playwright form-assist; never submits; pauses on CAPTCHA/MFA/unknown fields |
+| `automation/` | Optional Playwright form-assist (never submits) and `submit_page` for the Apply agent (submits only with no CAPTCHA / bot check / login, every required field approved, one submit control) |
+| `agents/` | Search, Resume, Apply and Manager agents; scheduler task `agents`; see docs/AGENTS.md |
 | `web/` | FastAPI routes, Jinja2 templates, static CSS/JS; CSRF (same-origin) and trusted-host middleware |
 
 ## Key design decisions
@@ -51,8 +52,9 @@ is optional and disabled by default.
 - **Deterministic templates** for outreach: missing facts render as visible
   `[[MISSING: …]]` placeholders and block approval; nothing is invented.
 - **Human-in-the-loop gates**: resume content changes need approval; drafts need
-  approval before Gmail send; browser automation never clicks submit; an application
-  becomes `applied` only with confirmation evidence.
+  approval before Gmail send; the assisted browser never clicks submit; the Apply agent
+  submits only in automatic mode with no bot check / login / unapproved answer (docs/AGENTS.md); an application
+  becomes `applied` only with confirmation evidence (or the sent application email).
 - **Tasks** run through `services/tasks.run_task`: `fcntl` lock per task (no overlap),
   bounded retries, and a `task_runs` record. The scheduler only invokes due tasks.
 - **Audit log** for every consequential action (`audit_log` table + JSON log).
@@ -89,9 +91,12 @@ Resumes are generated only on request (job page or CLI); there is no scheduled g
 location, work mode and title, stored in `jobs.regions` (migration 0013) and set on every ingest. The Jobs page filters
 by it (region tabs) and the dashboard groups top matches by it. Board sources accept `"regions"` next to
 `location_keywords`; `sources/remote.py` adds the Himalayas and Jobicy remote boards, and
-`services/regional_sources.py` holds the recommended India / remote / Dubai source presets. JobPilot never submits
-applications: the autopilot service, its scheduler task and Telegram batch approvals were removed on 2026-10-23
-(the `submission_batches` table is kept for history).
+`services/regional_sources.py` holds the recommended India / remote / Dubai source presets; `sources/yc.py` reads
+Y Combinator's job board; `services/roles.py` decides from the title whether a job is an SDE / backend role (used by
+the cleanup). The autopilot service,
+its scheduler task and Telegram batch approvals were removed on 2026-10-23 (the `submission_batches` table is kept
+for history); applying is now done by the agents in `agents/` (2026-10-25, docs/AGENTS.md), which reuse its
+safeguards: re-check before the click, the attempt recorded before clicking, unclear outcomes never retried.
 
 ## Data locations (all under `JOBPILOT_DATA_DIR`, default `./data`, git-ignored)
 

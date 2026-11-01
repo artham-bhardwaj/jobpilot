@@ -25,11 +25,12 @@ def test_every_page_renders_in_the_shared_shell(client, path):
     assert current[0] == expected
 
 
-def test_stylesheet_is_light_by_default_and_token_based(client):
+def test_stylesheet_is_dark_by_default_with_a_light_option_and_token_based(client):
     css = client.get("/static/app.css").text
-    assert "prefers-color-scheme: dark" not in css, "light is the default regardless of the OS setting"
+    assert "prefers-color-scheme" not in css, "the theme is the user's choice, not the OS setting"
     assert ":focus-visible" in css and "prefers-reduced-motion" in css
-    rules = css.split(":root[data-theme=\"dark\"]")[1].split("}", 1)[1]  # everything after the token blocks
+    assert "color-scheme: dark" in css.split(":root[data-theme=\"light\"]")[0], "dark (Midnight) is the default"
+    rules = css.split(":root[data-theme=\"light\"] {")[1].split("}", 1)[1]  # everything after the token blocks
     hexes = set(re.findall(r"#[0-9a-fA-F]{3,6}\b", rules))
     assert len(hexes) <= 3, f"colours come from tokens, found literals: {sorted(hexes)}"
 
@@ -49,3 +50,13 @@ def test_overview_shows_only_real_counts_including_outreach(client, db):
     assert "Outreach" in html and "Approved, not sent" in html
     assert re.search(r"Approved, not sent</a><b>1</b>", html)
     assert re.search(r"in your Gmail Drafts.*?<b>0</b>", html, re.S), "nothing claimed in Gmail without Gmail's confirmation"
+
+
+def test_navigation_is_grouped_into_sections_with_the_current_one_open(client):
+    html = client.get("/desk").text
+    sections = re.findall(r'<details class="nav-section"( open)?>\s*<summary class="nav-group[^"]*">.*?<span>([^<]+)</span>', html, re.S)
+    assert [name for _, name in sections] == ["Home", "Find jobs", "Apply", "Outreach", "You", "Settings"]
+    assert [name for is_open, name in sections if is_open] == ["Apply"], "only the current section is expanded"
+    assert '<span class="topbar-crumb">' in html and "<b>Job desk</b>" in html
+    assert "data-theme-toggle" in html and '<script src="/static/theme.js"></script>' in html
+    assert "localStorage" in client.get("/static/theme.js").text

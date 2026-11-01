@@ -47,6 +47,7 @@ def _add(db, title, location, remote_type=None, score=80.0, **kw):
                                               description_text="Java, Spring Boot, SQL (synthetic)",
                                               source_url=f"https://example.com/{title.replace(' ', '-')}"), "manual")
     job.relevance_score = score
+    job.category = kw.pop("category", "java_backend")  # one of your role categories, as matching would set
     db.commit()
     return job
 
@@ -84,7 +85,7 @@ def test_jobs_page_has_region_tabs_badges_and_resume_button(client, db):
     _add(db, "Backend Engineer A", "Pune, India")
     d = _add(db, "Backend Engineer C", "Dubai, United Arab Emirates")
     page = client.get("/jobs").text
-    for label in ("India", "Remote", "Dubai / UAE", "Elsewhere"):
+    for label in ("All my regions", "India", "Remote", "Dubai / UAE"):
         assert label in page
     assert 'class="badge r-india"' in page and 'class="badge r-dubai"' in page
     assert f'href="/jobs/{d.id}#apply"' in page, "a resume / record button on every row (the apply panel)"
@@ -99,7 +100,7 @@ def test_dashboard_shows_jobs_by_region(client, db):
     _add(db, "Backend Engineer A", "Pune, India", score=91)
     _add(db, "Backend Engineer B", "Remote", "remote", score=77)
     page = client.get("/").text
-    assert "Jobs by region" in page and 'href="/jobs?region=remote"' in page
+    assert "SDE-1 jobs by region" in page and 'href="/jobs?region=remote"' in page
     assert "Backend Engineer A" in page and "Backend Engineer B" in page
 
 

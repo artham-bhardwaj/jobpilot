@@ -41,11 +41,17 @@ def check(settings: Settings, session: Session, deep: bool = False) -> dict:
     }
     gmail_cfg = settings.gmail_secrets_file.exists()
     gmail_tok = settings.gmail_token_file.exists()
+    from jobpilot.integrations import gmail as gmail_int
+
+    gmail_err = gmail_int.auth_error(settings) if gmail_tok else None
     checks["gmail"] = {
+        # A warning, not a failure: the app itself is healthy and a restart can't fix an expired sign-in (failing
+        # here would mark the Docker container unhealthy).
         "ok": True,
+        "warn": bool(settings.gmail_enabled and gmail_err),
         "detail": "disabled" if not settings.gmail_enabled
         else f"enabled; client secrets {'found' if gmail_cfg else 'MISSING'}; "
-             f"{'authorized' if gmail_tok else 'not authorized'}",
+             + ("sign-in expired: " + gmail_err if gmail_err else 'authorized' if gmail_tok else 'not authorized'),
     }
     from jobpilot.services import scheduler as sched_svc
 

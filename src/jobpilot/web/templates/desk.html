@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, score %}
+{% block title %}Job desk{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Job desk</h1>
+    <p class="lede">Each job with everything in one place: make a resume for it, apply, record it, or delete it.
+      {% if wide %}All levels, roles and regions.{% else %}Fresher &amp; SDE-1 roles in India, Dubai and remote, your target roles.{% endif %}</p>
+  </div>
+  <div class="actions">
+    <a class="button" href="/desk?{{ qs(scope=None if wide else 'any', page=None) }}">{{ "Only my focus" if wide else "Show all jobs" }}</a>
+    <a class="button" href="/jobs">Browse jobs</a>
+    {% if total %}{% set eq = qs(page=None) %}
+      <a class="button" href="/desk/export.pdf{{ '?' ~ eq if eq }}" download title="Download all {{ total }} job(s) in this tab: title, company, location and apply link">Export PDF</a>
+      <a class="button" href="/desk/export.xlsx{{ '?' ~ eq if eq }}" download title="Download all {{ total }} job(s) in this tab as an Excel sheet">Export Excel</a>
+    {% endif %}
+  </div>
+</header>
+
+{% if not template_ok or not compiler_ok or not tailor_enabled %}
+<div class="notice warn">Resume generation is unavailable:
+  {% if not tailor_enabled %}it is switched off in Settings → tailored_resumes.
+  {% elif not template_ok %}no resume template is registered yet (see <a href="/resumes">Resumes</a> and docs/TAILORED_RESUMES.md).
+  {% else %}LaTeX isn't installed here (the Docker image includes it; natively: <code>sudo apt install latexmk texlive-latex-recommended texlive-fonts-recommended</code>).{% endif %}
+  You can still download an approved resume for each job.</div>
+{% endif %}
+
+<nav class="region-tabs desk-tabs" aria-label="Which jobs">
+  {% for key, label, _ in tabs %}
+    <a href="/desk?{{ qs(tab=None if key == 'todo' else key, page=None) }}" class="{{ 'on' if tab == key else '' }}"{% if tab == key %} aria-current="page"{% endif %}>{{ label }} <span class="n">{{ counts[key] }}</span></a>
+  {% endfor %}
+</nav>
+
+<form method="get" action="/desk" class="search-panel card desk-search" role="search" data-autosubmit>
+  {% if tab != "todo" %}<input type="hidden" name="tab" value="{{ tab }}">{% endif %}
+  {% if wide %}<input type="hidden" name="scope" value="any">{% endif %}
+  <div class="search-row">
+    <label class="search-box">
+      <span class="visually-hidden">Search jobs</span>
+      <svg aria-hidden="true" viewBox="0 0 20 20" width="18" height="18"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input type="search" name="q" id="job-q" value="{{ q }}" autocomplete="off" spellcheck="false"
+             placeholder='Search: java spring -senior · company:amazon · in:pune'>
+      <kbd class="search-kbd" title="Press / to search">/</kbd>
+    </label>
+    <label class="field desk-sort"><span class="visually-hidden">Sort</span><select name="sort" aria-label="Sort">
+      {% for v, l in [("relevance","Best match"),("newest","Newest seen"),("posted","Recently posted"),("company","Company")] %}<option value="{{ v }}" {% if sort == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+    <button class="primary">Search</button>
+    {% if q %}<a class="button ghost" href="/desk?{{ qs(q=None, page=None) }}">Clear</a>{% endif %}
+  </div>
+</form>
+
+<p class="result-count muted"><b>{{ total }}</b> job{{ '' if total == 1 else 's' }}{% if q %} matching <b>{{ q }}</b>{% endif %}{% if pages > 1 %} · page {{ page }} of {{ pages }}{% endif %}</p>
+
+{% if cards %}
+<ul class="desk-list">
+{% for c in cards %}{% set j = c.job %}{% set a = c.app %}{% set tr = c.tr %}{% set applied = a and a.applied_at %}
+  <li class="desk-card{% if applied %} is-applied{% endif %}" id="job-{{ j.id }}">
+    <div class="desk-head">
+      <div class="job-score">{{ score(j.relevance_score) }}<span class="muted">match</span></div>
+      <div class="job-main">
+        <a class="job-title" href="/jobs/{{ j.id }}">{{ hl(j.title) }}</a>
+        <div class="job-meta">
+          <span class="job-company">{{ hl(j.company_name or "Unknown company") }}</span>
+          <span aria-hidden="true">·</span><span>{{ hl(j.location or "Location not stated") }}</span>
+          <span aria-hidden="true">·</span><span>{% if j.posted_at %}posted {{ j.posted_at|d }}{% else %}seen {{ j.first_seen_at|d }}{% endif %}</span>
+        </div>
+        <div class="job-tags">
+          {{ j|region_badges }}
+          {% if j.level_fit == "fit" %}{{ badge("Fresher / SDE-1", "b-level-fit") }}{% elif j.level_fit == "no" %}{{ badge("above SDE-1", "b-warn") }}{% else %}{{ badge("level not stated", "b-none") }}{% endif %}
+          {% if j.experience_min_years is not none %}<span class="badge b-none">{{ j.experience_min_years|round|int }}{% if j.experience_max_years %}–{{ j.experience_max_years|round|int }}{% else %}+{% endif %} yrs</span>{% endif %}
+          {% if j.category in categories %}<span class="badge b-cat">{{ categories[j.category].label }}</span>{% endif %}
+          {% if j.eligibility and j.eligibility not in ("eligible", "unknown") %}{{ badge(j.eligibility|replace('_', ' '), 'b-' ~ j.eligibility) }}{% endif %}
+          {% if j.user_status == "shortlisted" %}{{ badge("saved", "b-shortlisted") }}{% endif %}
+          {% if j.status == "expired" %}{{ badge("expired") }}{% endif %}
+        </div>
+      </div>
+      <div class="desk-delete">
+        {% if a %}<span class="muted small" title="You have an application for this job, so it is kept as your record">has application</span>
+        {% else %}
+        <form method="post" action="/desk/{{ j.id }}/delete" class="inline" data-confirm="Delete “{{ j.title }}” at {{ j.company_name or 'this company' }}? Its tailored resumes go too, and your sources won't add it again. This can't be undone.">
+          <input type="hidden" name="next" value="{{ here }}">
+          <button class="small danger" title="Delete this job for good">Delete</button></form>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="desk-steps">
+      <section class="desk-step" aria-label="Resume">
+        <div class="step-t"><span class="step-n">1</span>Resume for this job</div>
+        {% if c.tr_ready %}
+          <p class="ok-line">✓ Tailored resume ready <span class="muted small">· {{ tr.created_at|d }}{% if tr.page_count %} · {{ tr.page_count }} page{{ 's' if tr.page_count != 1 }}{% endif %}</span></p>
+          <div class="row-actions">
+            <a class="button small primary" href="/tailored-resumes/{{ tr.id }}/download">Download PDF</a>
+            <form method="post" action="/jobs/{{ j.id }}/tailored-resume" class="inline"><input type="hidden" name="force" value="1"><input type="hidden" name="next" value="{{ here }}#job-{{ j.id }}">
+              <button class="small" data-busy-label="Generating…" title="Make it again from your current profile">Regenerate</button></form>
+            <a class="button small ghost" href="/jobs/{{ j.id }}#tailored">What changed?</a>
+          </div>
+        {% else %}
+          {% if tr and tr.status not in ("valid", "superseded") %}<p class="bad-line small" title="{{ tr.error or '' }}">Last try: {{ tr.status }} — {{ (tr.error or '')[:140] }}</p>{% endif %}
+          {% if template_ok and compiler_ok and tailor_enabled %}
+          <form method="post" action="/jobs/{{ j.id }}/tailored-resume" class="inline"><input type="hidden" name="next" value="{{ here }}#job-{{ j.id }}">
+            <button class="small primary" data-busy-label="Generating… (a few seconds)">Generate resume for this job</button></form>
+          {% endif %}
+          {% if not c.selection.missing %}<div class="small muted">or use <a href="/resumes/versions/{{ c.selection.version.id }}/download">{{ c.selection.version.resume.name }} v{{ c.selection.version.version_no }}</a></div>
+          {% elif not (template_ok and compiler_ok) %}<a class="button small" href="/resumes">Add a resume</a>{% endif %}
+        {% endif %}
+      </section>
+
+      <section class="desk-step" aria-label="Apply">
+        <div class="step-t"><span class="step-n">2</span>Apply</div>
+        {% set link = j.apply_url or j.source_url %}
+        {% if link %}<a class="button small primary" href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ "Apply on company site" if j.apply_url else "Open posting" }} ↗</a>
+          {% if j.apply_url and j.source_url and j.source_url != j.apply_url %}<div class="small"><a href="{{ j.source_url }}" target="_blank" rel="noopener noreferrer">view posting ↗</a></div>{% endif %}
+        {% else %}<span class="muted small">No link captured. Search the company's careers page.</span>{% endif %}
+      </section>
+
+      <section class="desk-step grow" aria-label="Record">
+        <div class="step-t"><span class="step-n">3</span>Record it</div>
+        {% if applied %}
+          <p class="ok-line">✓ Applied {{ a.applied_at|d }} {{ badge(a.status) }} · <a href="/applications/{{ a.id }}">application #{{ a.id }}</a></p>
+        {% else %}
+          <form method="post" action="/tracker/jobs/{{ j.id }}/applied" class="desk-apply-form">
+            <label class="field"><span>Resume used</span><select name="resume_version_id">
+              {% if c.tr_ready %}<option value="tailored" selected>Tailored resume for this job</option>{% endif %}
+              {% for v in approved_resumes %}<option value="{{ v.id }}" {% if not c.tr_ready and not c.selection.missing and v.id == c.selection.version.id %}selected{% endif %}>{{ v.resume.name }} v{{ v.version_no }}</option>{% endfor %}
+              <option value="">another resume</option></select></label>
+            <label class="field"><span>Date</span><input type="date" name="applied_on" value="{{ today }}" max="{{ today }}"></label>
+            <input type="hidden" name="next" value="{{ here }}">
+            <button class="small primary">✓ I applied</button>
+          </form>
+          {% if j.user_status != "shortlisted" %}
+          <form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="shortlisted"><input type="hidden" name="next" value="{{ here }}#job-{{ j.id }}"><button class="small ghost">Save for later</button></form>
+          {% endif %}
+        {% endif %}
+      </section>
+    </div>
+  </li>
+{% endfor %}
+</ul>
+{% if pages > 1 %}<div class="actions pager">
+  {% if page > 1 %}<a class="button" href="/desk?{{ qs(page=page - 1) }}">← Previous</a>{% endif %}
+  <span class="muted small">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="button" href="/desk?{{ qs(page=page + 1) }}">Next →</a>{% endif %}
+</div>{% endif %}
+{% else %}
+<div class="empty-state card">
+  {% if q %}<p><b>No jobs match “{{ q }}”</b> here.</p>{% if not wide %}<p><a class="button" href="/desk?{{ qs(scope='any', page=None) }}">Search all jobs</a></p>{% endif %}
+  {% elif tab == "applied" %}<p>You haven't recorded any applications yet.</p>
+  {% elif tab == "saved" %}<p>Nothing saved. Use “Save for later” on a job.</p>
+  {% else %}<p>No jobs to apply to right now. <a href="/sources">Add a source</a> or <a href="/jobs/new">add a job</a>.</p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

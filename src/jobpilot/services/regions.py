@@ -122,18 +122,20 @@ def counts(session, status: str = "active") -> dict[str, int]:
 
 
 def overview(session, per_region: int = 5, new_days: int = 7) -> list[dict]:
-    """For the dashboard: per region, active job count, how many are new this week, and the best matches."""
+    """For the dashboard: per region, active fresher / SDE-1 job count, how many are new this week, and the best matches."""
     from datetime import timedelta
 
-    from sqlalchemy import func, select
+    from sqlalchemy import func, or_, select
 
     from jobpilot.models import Job, utcnow
 
     since = utcnow() - timedelta(days=new_days)
     out = []
     for r in REGIONS:
+        # Same focus as the Jobs page default: fresher / SDE-1 (or level not stated), in your role categories.
         base = select(Job).where(Job.status == "active", Job.user_status != "dismissed",
-                                 Job.regions.like(f"%,{r},%"))
+                                 Job.regions.like(f"%,{r},%"), or_(Job.level_fit.is_(None), Job.level_fit != "no"),
+                                 Job.category.is_not(None))
         count = session.scalar(select(func.count()).select_from(base.subquery())) or 0
         new = session.scalar(select(func.count()).select_from(base.where(Job.first_seen_at >= since).subquery())) or 0
         top = list(session.scalars(base.order_by(Job.relevance_score.desc().nulls_last(), Job.first_seen_at.desc())

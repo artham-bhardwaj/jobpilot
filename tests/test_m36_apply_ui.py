@@ -46,11 +46,11 @@ def test_jobs_list_applied_filter_badge_and_overview_ready_list(world, client, d
     todo = job(db, "https://example.com/apply/5", title="Open Role", company="Beta")
     client.post(f"/tracker/jobs/{done.id}/applied", data={"resume_version_id": str(_version(db).id)})
 
-    page = client.get("/jobs").text
-    assert "✓ applied" in page and 'class="row-applied"' in page
-    only_open = client.get("/jobs?applied=no").text
+    page = client.get("/jobs?region=any").text  # these synthetic jobs have no location
+    assert "✓ applied" in page and 'class="job-card is-applied"' in page
+    only_open = client.get("/jobs?region=any&applied=no").text
     assert "Open Role" in only_open and "Applied Role" not in only_open
-    only_done = client.get("/jobs?applied=yes").text
+    only_done = client.get("/jobs?region=any&applied=yes").text
     assert "Applied Role" in only_done and "Open Role" not in only_done
 
     home = client.get("/").text

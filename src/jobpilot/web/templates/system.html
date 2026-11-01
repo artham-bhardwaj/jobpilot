@@ -9,7 +9,7 @@
   <table class="kv">
     <tr><th>Version</th><td>{{ health.version }}</td></tr>
     {% for name, c in health.checks.items() %}
-    <tr><th>{{ name|replace("_", " ") }}</th><td>{{ "✔" if c.ok else "✖" }} {{ c.detail }}</td></tr>
+    <tr><th>{{ name|replace("_", " ") }}</th><td>{{ "✖" if not c.ok else "⚠" if c.warn else "✔" }} {{ c.detail }}</td></tr>
     {% endfor %}
   </table>
 </section>

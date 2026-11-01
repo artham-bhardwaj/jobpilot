@@ -134,7 +134,7 @@ def record_self_applied(session: Session, job: Job, resume_version_id: int | Non
 def review_close(session: Session, app: Application) -> None:
     from jobpilot.services import review
 
-    for kind in ("submission_approval", "browser_paused"):
+    for kind in ("submission_approval", "browser_paused", "agent_needs_you"):
         review.resolve_items(session, kind, "application", app.id, "you applied")
 
 

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "_macros.html" import field, textarea, select %}
+{% block title %}From a LinkedIn post{% endblock %}
+{% block content %}
+<h1>Draft an email from a hiring post</h1>
+<p class="muted">Copy a "we're hiring" post from LinkedIn and paste it here. JobPilot saves the job and the poster as a
+contact, and writes a draft if the post lists an email address. JobPilot never opens LinkedIn: the link is only kept
+as the source. Nothing is sent until you approve the draft.</p>
+
+<section class="card">
+  <h2>1. Paste the post</h2>
+  <form method="post" action="/drafts/from-post/parse">
+    {{ textarea("post_text", "Post text (everything you copied)", form.post_text, rows=10, required=True) }}
+    {{ field("post_url", "Post link (optional, linkedin.com)", form.post_url, type="url") }}
+    <div class="actions"><button class="{{ '' if parsed else 'primary' }}">Read the post</button></div>
+  </form>
+</section>
+
+{% if parsed %}
+<section class="card">
+  <h2>2. Check and create</h2>
+  {% for w in parsed.warnings %}<p class="flash err">{{ w }}</p>{% endfor %}
+  <p class="muted small">These were read from the post. Fix anything that's wrong.</p>
+  <form method="post" action="/drafts/from-post">
+    <input type="hidden" name="post_text" value="{{ form.post_text }}">
+    <input type="hidden" name="post_url" value="{{ form.post_url or '' }}">
+    <div class="form-grid">
+      {{ field("role_title", "Role", form.role_title, required=True) }}
+      {{ field("company_name", "Company", form.company_name, required=True) }}
+      {{ field("location", "Location", form.location) }}
+      {{ field("poster_name", "Poster's name", form.poster_name) }}
+      {{ field("poster_title", "Poster's headline", form.poster_title) }}
+      {{ select("role_type", "Poster is a", [("recruiter", "recruiter / talent team"), ("hiring_manager", "hiring manager / engineer")], form.role_type) }}
+      {% if parsed.emails|length > 1 %}
+        {{ select("email", "Email (from the post)", parsed.emails, form.email) }}
+      {% else %}
+        {{ field("email", "Email (from the post)", form.email, type="email") }}
+      {% endif %}
+      {{ select("template_key", "Email template", [("recruiter_outreach", "Recruiter outreach"), ("hiring_manager", "Hiring manager outreach")], form.template_key) }}
+    </div>
+    <label class="checkbox"><input type="checkbox" name="email_in_post" value="1" {% if form.email_in_post %}checked{% endif %}>
+      The poster published this email address in the post (needed to draft an email)</label>
+    <div class="actions"><button class="primary">Save lead{% if form.email %} and draft email{% endif %}</button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

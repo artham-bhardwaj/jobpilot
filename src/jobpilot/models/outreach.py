@@ -102,6 +102,8 @@ class EmailDraft(TimestampMixin, Base):
     job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), index=True)
     application_id: Mapped[int | None] = mapped_column(ForeignKey("applications.id", ondelete="SET NULL"), index=True)
     resume_version_id: Mapped[int | None] = mapped_column(ForeignKey("resume_versions.id", ondelete="SET NULL"))
+    # A validated resume tailored to this draft's job, attached instead of resume_version (email applications).
+    tailored_resume_id: Mapped[int | None] = mapped_column(ForeignKey("tailored_resumes.id", ondelete="SET NULL"))
     to_address: Mapped[str | None] = mapped_column(String(320))
     subject: Mapped[str] = mapped_column(Text)
     body: Mapped[str] = mapped_column(Text)

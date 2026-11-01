@@ -14,7 +14,7 @@ from jobpilot.models.base import Base, utcnow
 from jobpilot.models.hub import ProfileClaim, ProfileImport
 from jobpilot.models.interviews import Interview, LearningItem, PrepPack
 from jobpilot.models.notifications import IntegrationState, Notification, NotificationKey, TelegramUpdate
-from jobpilot.models.jobs import Company, Job, JobSighting, JobSource, MatchFeedback, SourceRun
+from jobpilot.models.jobs import Company, DeletedJob, Job, JobSighting, JobSource, MatchFeedback, SourceRun
 from jobpilot.models.outreach import (
     Contact,
     ContactInteraction,
@@ -43,7 +43,7 @@ __all__ = [
     "Base", "utcnow", "AppSetting", "AuditLog", "TaskRun",
     "CandidateProfile", "Education", "Employment", "ProfileLink", "Project", "Skill", "Certification", "Achievement",
     "Resume", "ResumeVersion", "ProfileClaim", "ProfileImport", "Notification", "NotificationKey", "SubmissionBatch", "TelegramUpdate", "IntegrationState",
-    "Company", "Job", "JobSighting", "JobSource",
+    "Company", "DeletedJob", "Job", "JobSighting", "JobSource",
     "Contact", "ContactInteraction", "DoNotContact", "EmailDraft", "EmailTemplate",
     "Application", "ApplicationEvent", "ApplicationEvidence", "BrowserRun", "ReviewItem",
     "Interview", "LearningItem", "PrepPack",

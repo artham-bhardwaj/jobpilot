@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = ["playwright>=1.45"]
+assistant = ["mcp>=2.3,<3"]  # jobpilot mcp: the connector for Claude Code
 dev = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]

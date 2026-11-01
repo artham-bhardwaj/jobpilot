@@ -158,7 +158,7 @@ def test_every_page_renders_on_empty_database(client):
 
     from jobpilot.web.deps import TEMPLATES_DIR
 
-    nav = re.findall(r'\("[^"]+", "(/[^"]*)", "[^"]+"\)', (TEMPLATES_DIR / "base.html").read_text())
+    nav = re.findall(r'\("[^"]+", "(/[^"]*)"\)', (TEMPLATES_DIR / "base.html").read_text())  # ("Label", "/path")
     assert len(nav) >= 14
     for url in nav + ["/jobs/new", "/drafts/templates", "/gmail", "/health", "/system/export.json"]:
         r = client.get(url)

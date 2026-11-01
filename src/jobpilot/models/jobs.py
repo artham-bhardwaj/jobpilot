@@ -62,6 +62,8 @@ class Job(TimestampMixin, Base):
     experience_level: Mapped[str | None] = mapped_column(String(20))  # entry|mid|senior|None
     experience_min_years: Mapped[float | None] = mapped_column(Float)
     experience_max_years: Mapped[float | None] = mapped_column(Float)
+    # Fresher / SDE-1 fit (services/levels.py): fit | unstated | no.
+    level_fit: Mapped[str | None] = mapped_column(String(10), index=True)
     salary_min: Mapped[int | None] = mapped_column(Integer)
     salary_max: Mapped[int | None] = mapped_column(Integer)
     salary_currency: Mapped[str | None] = mapped_column(String(10))
@@ -89,6 +91,8 @@ class Job(TimestampMixin, Base):
 
     # User triage.
     user_status: Mapped[str] = mapped_column(String(20), default="new", index=True)  # new|shortlisted|dismissed
+    # Set when the relevance cleanup hid the job ("cleanup:level,region"; services/cleanup.py); None otherwise.
+    hidden_reason: Mapped[str | None] = mapped_column(String(80), index=True)
     notes: Mapped[str | None] = mapped_column(Text)
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
@@ -157,6 +161,21 @@ class SourceRun(Base):
     warnings: Mapped[list[Any] | None] = mapped_column(JSON)
 
     source: Mapped[JobSource] = relationship()
+
+
+class DeletedJob(Base):
+    """A job you deleted: enough to recognise it if a source lists it again, so it isn't re-added."""
+
+    __tablename__ = "deleted_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    apply_url_canonical: Mapped[str | None] = mapped_column(String(1000), index=True)
+    source_id: Mapped[int | None] = mapped_column(Integer)
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(300))
+    company_name: Mapped[str | None] = mapped_column(String(200))
+    deleted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class MatchFeedback(Base):

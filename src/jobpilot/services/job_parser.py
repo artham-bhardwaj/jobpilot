@@ -152,36 +152,104 @@ _ADVANCED_DEGREE_ONLY = re.compile(
     re.I)
 
 
+# "3+ years working with Kafka", "5+ years building APIs": a stated requirement without the word "experience". Only
+# with "+"/"plus", which marks a requirement ("2 years working here" alone could be anything).
+_YEARS_WORKING = re.compile(
+    r"(?P<min>\d{1,2})\s*(?:\+|plus)\s*(?:years?|yrs?)(?:'|’)?\s*(?:of\s+)?(?:hands[\s-]on\s+)?"
+    r"(?:working|building|developing|programming|coding|designing|writing|professional|industry|hands[\s-]on)\b",
+    re.I)
+# A requirement bullet that starts with the figure and names "experience" later, after a long qualifier:
+# "- 3+ years of computer science fundamentals (object-oriented design, …, complexity analysis) experience".
+_YEARS_BULLET = re.compile(
+    rf"^[\W_]{{0,4}}(?P<min>\d{{1,2}}(?:\.\d)?)\s*(?:\+|plus)?\s*(?:{_RANGE_SEP}\s*(?P<max>\d{{1,2}}(?:\.\d)?)\s*)?\+?\s*"
+    r"(?:years?|yrs?)(?:'|’)?\s+of\b.{0,250}?\b(?:experience|exp)\b", re.I)
+# A sentence about the employer ("With over 20 years of experience, our company …"), not about you.
+_ABOUT_EMPLOYER = re.compile(r"\b(our company|the company|our firm|founded|in business|our clients|our customers|"
+                             r"we have been|we've been|industry leader|our team has)\b", re.I)
+_EMPLOYER_QUANTITY = re.compile(r"\b(over|more than|nearly|almost|for (?:the )?(?:past|last)?)\s*$", re.I)
+_ABOUT_YOU = re.compile(r"\b(you|your|candidate|applicant|required|requirements?|must|should|need|minimum|"
+                        r"at least|qualifications?|looking for|seeking|hiring|someone|engineers?|developers?)\b", re.I)
+# Wording that makes a figure a wish, not a requirement (in addition to the preferred headings and markers).
+_PREFERRED_FIGURE = re.compile(r"\b(valued|appreciated|an advantage|advantageous|ideally|desirable|beneficial|"
+                               r"would be nice|helpful|is a bonus|preferably)\b", re.I)
+_SENTENCE_END = re.compile(r"(?<![a-z]\.[a-z]\.)(?<=[.!?;])\s+|\n", re.I)  # not after "e.g." / "i.e."
+# Section headings written inline ("… in office. Basic Qualifications: 7+ years … Preferred Qualifications: 5+ …").
+_INLINE_HEADING = re.compile(r"(?=\b(?:basic|minimum|required|preferred|desired|additional|bonus)\s+qualifications?\s*:"
+                             r"|\bnice[\s-]to[\s-]haves?\s*:|\bgood[\s-]to[\s-]haves?\s*:|\bwhat you(?:'|’)ll need\s*:)", re.I)
+
+
+def _requirement_lines(text: str):
+    """Each line with whether it is in a preferred / nice-to-have context (heading or inline marker), following the
+    same rules as split_sections."""
+    preferred_section = False
+    for raw in _INLINE_HEADING.sub("\n", text).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        head = line.split(":", 1)[0] + ":" if ":" in line[:60] else line
+        if _is_heading(line) or _is_heading(head):
+            h = line if _is_heading(line) else head
+            if _PREFERRED_HEAD.search(h):
+                preferred_section = True
+            elif _OTHER_HEAD.search(h) or _REQUIRED_HEAD.search(h):
+                preferred_section = False
+        # Inline wishes ("… is a plus") are judged per sentence by the caller.
+        yield line, preferred_section
+
+
+def _figures(sentence: str) -> list[tuple[float, float | None, str, bool, int]]:
+    """(min, max, snippet, for-advanced-degree-only, position) of each years/months figure in one sentence."""
+    out, starts = [], set()
+    pats = [(_YEARS, 1.0), (_EXP_MONTHS, 12.0), (_YEARS_REVERSED, 1.0), (_YEARS_WORKING, 1.0), (_YEARS_BULLET, 1.0)]
+    for pat, per_year in pats:
+        for m in pat.finditer(sentence):
+            if m.start("min") in starts:  # the same figure matched by two patterns
+                continue
+            lo = round(float(m.group("min")) / per_year, 2)
+            hi = round(float(m.group("max")) / per_year, 2) if "max" in pat.groupindex and m.group("max") else None
+            if lo > 30 or (hi is not None and hi < lo):
+                continue
+            starts.add(m.start("min"))
+            advanced_only = bool(_ADVANCED_DEGREE_ONLY.match(sentence[m.end():m.end() + 60]))
+            out.append((lo, hi, m.group(0).strip(), advanced_only, m.start()))
+    return sorted(out, key=lambda f: f[4])
+
+
 def parse_experience(text: str) -> tuple[float | None, float | None, str | None]:
     """(min years, max years, snippet) of the stated experience requirement; (None, None, None) if none is stated.
 
-    An explicit zero ("0 to 12 months of experience") is (0.0, 1.0, …), never confused with "not stated". Months are
-    converted to years (the stored unit).
+    The requirement is the **highest** figure you must meet: "7+ years in software engineering … 2+ years with CI/CD"
+    needs 7, not 2. Figures in a preferred / nice-to-have context are left out (they're used only when nothing else is
+    stated), as are figures about the employer ("with over 20 years of experience, we …") and figures that apply only
+    to holders of an advanced degree. Alternatives in one sentence ("3+ years with Java or 5+ years in any language")
+    count as their lowest. An explicit zero ("0 to 12 months of experience") is (0.0, 1.0, …), never confused with
+    "not stated". Months are converted to years (the stored unit).
     """
-    best: tuple[float, float | None, str] | None = None
-    candidates = []
-    matches = [(m, 1.0) for m in _YEARS.finditer(text)] + [(m, 12.0) for m in _EXP_MONTHS.finditer(text)] + \
-        [(m, 1.0) for m in _YEARS_REVERSED.finditer(text)]
-    for m, per_year in matches:
-        lo = round(float(m.group("min")) / per_year, 2)
-        hi = round(float(m.group("max")) / per_year, 2) if m.group("max") else None
-        if lo > 30 or (hi is not None and hi < lo):
-            continue
-        advanced_only = bool(_ADVANCED_DEGREE_ONLY.match(text[m.end():m.end() + 60]))
-        candidates.append((lo, hi, m.group(0).strip(), advanced_only))
-    # Figures stated only for PhD/Master's holders are alternatives, not the general requirement.
-    general = [c for c in candidates if not c[3]] or candidates
-    for lo, hi, snippet, _ in general:
-        # Prefer the smallest stated minimum (the overall requirement is usually the lowest).
-        if best is None or lo < best[0]:
-            best = (lo, hi, snippet)
-    if best is None:
-        m = _YEARS_MIN_WORDS.search(text)
-        if m:
-            best = (float(m.group("min")), None, m.group(0).strip())
-    if best is None:
-        return None, None, None
-    return best
+    required: list[tuple[float, float | None, str]] = []
+    preferred: list[tuple[float, float | None, str]] = []
+    for line, is_preferred in _requirement_lines(text or ""):
+        for sentence in _SENTENCE_END.split(line):
+            figs = _figures(sentence)
+            if not figs:
+                continue
+            if (_ABOUT_EMPLOYER.search(sentence) and not _ABOUT_YOU.search(sentence)
+                    and _EMPLOYER_QUANTITY.search(sentence[:figs[0][4]])):
+                continue
+            general = [f for f in figs if not f[3]] or figs
+            if len(general) > 1 and re.search(r"\bor\b", sentence[general[0][4]:general[-1][4]], re.I):
+                pick = min(general, key=lambda f: f[0])  # alternatives: the easiest one qualifies you
+            else:
+                pick = max(general, key=lambda f: f[0])
+            wish = is_preferred or bool(_PREFERRED_HEAD.search(sentence) or _PREFERRED_FIGURE.search(sentence))
+            (preferred if wish else required).append(pick[:3])
+    if required:
+        return max(required, key=lambda f: f[0])
+    if preferred:  # only "preferred" figures stated: the lowest is the closest thing to a requirement
+        return min(preferred, key=lambda f: f[0])
+    m = _YEARS_MIN_WORDS.search(text or "")
+    if m:
+        return float(m.group("min")), None, m.group(0).strip()
+    return None, None, None
 
 
 def level_from(title: str, exp_min: float | None) -> str | None:

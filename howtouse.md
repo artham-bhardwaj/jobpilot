@@ -2,17 +2,61 @@
 
 JobPilot runs on your laptop as a background service. It finds jobs **in India, remote jobs open to India or the UAE,
 and jobs in Dubai / UAE**, scores them against your **confirmed** profile, makes a tailored resume for any job when you
-ask, tracks every application and watches your inbox for replies. **It never applies for you**: you open each posting
-and apply yourself.
+ask, tracks every application and watches your inbox for replies. Four **agents** (Search, Resume, Apply, Manager)
+can do the applying for you where it is safe, and hand you everything else ready to go: see **§0** and
+[docs/AGENTS.md](docs/AGENTS.md). You can still apply to any job yourself.
 
-The dashboard is at **http://127.0.0.1:8765**; that's where you work. Telegram (**@ArthamJobPilotBot**) only sends
-alerts: high matches, application updates, failures and the daily summary.
+The dashboard is at **http://127.0.0.1:8765**; that's where you work. Telegram (**@ArthamJobPilotBot**) sends
+alerts (high matches, application updates, failures, the daily summary) and answers plain messages with
+Claude (see **Ask Claude** below).
 
 Three rules it never breaks:
 - It never invents facts. Only confirmed profile information appears in scores, resumes, emails and forms.
 - It never gets past a CAPTCHA, login, MFA or anti-bot check, and never accepts a legal agreement, consent or
   signature for you.
-- It never submits an application. The browser helper can fill a form, but you click Submit.
+- It submits an application only in **automatic** agent mode, and only when the form has no CAPTCHA, bot check,
+  login or legal question and every answer is one you approved. Anything else comes to you.
+
+---
+
+## Ask Claude (Claude Code and Telegram)
+
+Ask in plain words — "top fintech Java jobs this week", "shortlist #203", "draft an email from this post: …" — and
+Claude does it with JobPilot's tools. It runs on your Claude Code sign-in: no API key, no extra cost (it counts
+toward your plan's usage). Claude can look things up, shortlist / dismiss jobs, add a job from a link, save a lead
+from a pasted hiring post and write or edit drafts. It **cannot** approve or send email, submit applications, delete
+anything or change settings; it gives you the dashboard link instead.
+
+- **In Claude Code** (any folder): the `jobpilot` connector is registered; just ask. `/mcp` shows it.
+- **In Telegram:** send a normal message (not a /command) to the bot; it answers "🤖 Asking Claude…" and then the
+  reply. Follow-ups continue the conversation; `/new` starts over (it also starts over after 2 hours of silence).
+  This needs your computer on, with the helper running:
+  `systemctl --user status jobpilot-assistant` (start / stop / restart the same way), or `jobpilot assistant run`
+  in a terminal. `jobpilot assistant status` says whether it is running. When it isn't, plain messages get the
+  usual "I only understand commands" reply.
+- Setup (done once; repeat after moving the project): `.venv/bin/pip install -e '.[assistant]'`,
+  `.venv/bin/jobpilot assistant setup`, then `systemctl --user daemon-reload && systemctl --user enable --now
+  jobpilot-assistant`. The Telegram part also needs the Docker copy updated (`./jobpilot-docker update`).
+- **Resumes from Telegram:** "make a resume for #203 and send it", or paste a job link or description ("make a resume for this job: …"). Claude adds the job if needed, makes the tailored resume from your Master resume's LaTeX source (compiled and validated on this computer, the same as **Create resume for this job**) and sends the PDF to the chat. Add "with the LaTeX" to also get the `.tex` (rebuilt and checked against the exact source that was compiled). It takes about a minute or two. `/usage` shows your plan limits.
+- It uses the lighter Sonnet model to save usage; set `JOBPILOT_ASSISTANT_MODEL=opus` in `.env` and restart the
+  helper for the larger one.
+
+---
+
+## 0. Agents (automatic applying)
+
+**Agents** (`/agents`) runs a cycle every few hours: the **Search** agent finds jobs (all sources, public feeds,
+your job-alert emails, new company boards), the **Resume** agent makes a validated tailored resume for each of the
+best ones, and the **Apply** agent emails the application when the posting asks for email, submits Greenhouse /
+Lever / Ashby forms when it is safe, and puts everything else on **Needs you** with the one step to take. The
+**Manager** picks the jobs (score ≥ 70, eligible, not applied, not in a company cooldown; dream companies are kept
+for you), keeps the daily limit (10) and sends a Telegram summary.
+
+To start: **Agents → Next cycle → Turn on**. It starts in **Dry run** (nothing sent or submitted): check what it would
+do, then tick **send real applications** → **Switch to automatic**. Telegram `/pause` stops all sending at once.
+Most forms (all Greenhouse boards checked, Lever, Workday, big-company sites) have a bot check or a login, so expect
+many "one step for you" items; those open filled with `jobpilot assist <id> --approve-host <host>`.
+Details: [docs/AGENTS.md](docs/AGENTS.md).
 
 ---
 
@@ -62,10 +106,17 @@ The laptop must be on (and logged in) for anything to run. Missed tasks run at t
 
 ## 3. The dashboard
 
+The menu has six sections: **Home** (Overview, Analytics), **Find jobs** (Jobs, Fintech jobs, Matching, Sources), **Apply** (Job desk,
+My tracker, Applications, Interviews, Review queue, Agents), **Outreach** (Recruiters, Companies, Email drafts), **You**
+(Profile, Information hub, Resumes, Answer bank, Skill gaps) and **Settings** (Settings, System). The section you're in
+stays open. The theme is dark ("Midnight") by default; the sun / moon button at the top right switches to light, and
+this browser remembers your choice.
+
 | Page | Use it for |
 |---|---|
 | **Overview** `/` | **Ready to apply** (best jobs you haven't applied to), today's numbers, the next thing to do, and **Jobs by region** (top matches in India, Remote, Dubai / UAE) |
 | **Jobs** `/jobs` | every collected job, with **region tabs** (All · India · Remote · Dubai / UAE · Elsewhere) and region badges; filter, sort, shortlist, dismiss, open the posting, or go to the job's resume. A job's page shows its score, eligibility, skills, the resume chosen for it, the **Resume for this job** panel (create, download, decisions, regenerate), contacts and the description |
+| **Fintech jobs** `/fintech` | the Jobs page limited to fintech, payments, broking, banks, exchanges, trading firms and crypto exchanges (company list in `services/sectors.py`), with the same filters, region tabs and exports |
 | **Matching** `/matching` | why jobs score as they do; thresholds |
 | **Review queue** `/review` | everything waiting for you, in one list |
 | **Applications** `/applications` | the pipeline by status; each application's checklist, questions, evidence and history |
@@ -172,7 +223,7 @@ Exit codes: 0 done, 1 bad input, 3 failed (the reason is printed), 4 no LaTeX co
 
 ## 6. Applying
 
-JobPilot never applies for you; the automatic-application feature (autopilot) was removed on 2026-10-23.
+The agents apply where it is safe (see §0 and [docs/AGENTS.md](docs/AGENTS.md)); every other job is yours to apply to.
 
 ### Yourself (every job)
 
@@ -228,6 +279,7 @@ rejected / withdrawn.
 | Add a recruiter you found (LinkedIn or Apollo, by hand) | **Recruiters → add**, or `jobpilot recruiters add --name … --company … --email … --email-status verified` |
 | Import an Apollo CSV | `jobpilot recruiters import file.csv` |
 | Apollo API search (free) and enrich (uses a credit, off unless you allow it) | `jobpilot recruiters search` / `enrich` |
+| Email someone from a LinkedIn "we're hiring" post | Copy the post, open **Outreach → From a LinkedIn post**, paste it (and its link if you like), check the role / company / email it read, tick that the poster published the address, and save. You get a job lead, a contact and a draft; approve and send it from **Email drafts**. The address is *unverified*, so automatic outreach never sends it for you. |
 | Draft, approve, cancel, list emails | `jobpilot outreach draft|approve|cancel|list`, or the **Email drafts** page |
 
 Automatic outreach is **on** (pause it with `/pause` or on the **System** page):
@@ -250,9 +302,12 @@ Every job is tagged with its region from its location and title:
 A job can be in two regions ("Remote - India" is India and Remote).
 
 The sources:
-- **India:** Amazon, Apple, Google, Microsoft, Atlassian; Workday (Visa, Mastercard, Adobe); Greenhouse and Lever
-  boards (Rubrik, GitLab, Stripe, MongoDB and others).
-- **Remote:** Himalayas (remote jobs open to India or the UAE) and Jobicy (remote jobs worldwide, APAC, EMEA, UAE).
+- **India:** Amazon, Apple, Google, Microsoft, Atlassian; Workday (Visa, Mastercard, Adobe, Citi, Salesforce, NVIDIA,
+  Intel, Wells Fargo, Target, Motorola Solutions, Workday, Thomson Reuters, PayPal, CrowdStrike); Greenhouse boards
+  (Rubrik, GitLab, Stripe, MongoDB, Pure Storage, InMobi, HackerRank, Groww, Toast, Druva, Twilio and others); Lever
+  boards (Mindtickle, Meesho, Paytm, CRED, Zeta, FamPay).
+- **Remote:** Himalayas (remote jobs open to India or the UAE), Jobicy, Remote OK, Working Nomads, We Work Remotely.
+- **Startups:** Y Combinator's job board (India and remote software roles; applying needs a free YC account).
 - **Dubai / UAE:** Bybit, Binance, OKX, Careem (Greenhouse), Amazon UAE, Microsoft UAE. Most UAE
   engineering roles on these boards are senior, so expect few matches at your level.
 - Board sources with a location filter also keep remote and Dubai roles (`"regions": ["india", "remote", "dubai"]`).
@@ -260,7 +315,15 @@ The sources:
 **Sources → Add regional sources** (or `jobpilot regional-sources --apply`) adds any of these that are missing. It
 never changes a source you already have, except to add the regions to board sources that filter by location.
 
-Each source respects the site's `robots.txt` and rate limits.
+Each source respects the site's `robots.txt` and rate limits. Not used: Naukri, LinkedIn, Indeed, foundit and
+Wellfound (their terms forbid automated collection; their **alert emails** are read instead, see Agents),
+SmartRecruiters and Recruitee (robots.txt disallows their APIs).
+
+**Only SDE / backend roles.** After every collection the cleanup hides jobs whose title isn't an SDE / backend role:
+QA / test, support, sales, mobile (Android, iOS, React Native), frontend-only, DevOps / SRE, data / ML-only,
+firmware / embedded, low-code (Salesforce, AEM …) and gig listings ("AI coding tasks", talent pools). Full stack and
+"Software Engineer, <any team>" are kept. Hidden jobs are not deleted: **Jobs → Hidden by cleanup** shows them and **Undo**
+restores them. To switch this off, set `"sde_backend_only": false` in the `job_cleanup` setting.
 
 | Task | Command or page |
 |---|---|

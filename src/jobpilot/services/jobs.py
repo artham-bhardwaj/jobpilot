@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from jobpilot.config import Settings
 from jobpilot.models import Company, Job, JobSighting, JobSource, SourceRun, utcnow
-from jobpilot.services import audit, job_parser, regions, settings_store
+from jobpilot.services import audit, job_parser, levels, regions, settings_store
 from jobpilot.services.text_utils import normalize_company, normalize_location, normalize_title, safe_url, sha256
 from jobpilot.sources import ADAPTERS
 from jobpilot.sources.base import JobData
@@ -98,6 +98,7 @@ def _apply_data(job: Job, data: JobData) -> None:
     job.experience_min_years = parsed.experience_min_years
     job.experience_max_years = parsed.experience_max_years
     job.experience_level = parsed.experience_level
+    job.level_fit = levels.classify(job.title, job.experience_min_years)
     job.salary_min = data.salary_min if data.salary_min is not None else parsed.salary_min
     job.salary_max = data.salary_max if data.salary_max is not None else parsed.salary_max
     job.salary_currency = data.salary_currency or (parsed.salary_currency if parsed.salary_min else None)
@@ -248,11 +249,16 @@ def ingest(session: Session, source: JobSource | None, items: list[JobData], met
     - Failed, partial or malformed fetches never reach this point with ``full_snapshot=True``.
     """
     cfg = settings_store.get(session, "collection")
+    from jobpilot.services import job_delete
+
     stats: dict[str, Any] = {"fetched": len(items), **{o: 0 for o in OUTCOMES}, "expired": 0, "missing": 0,
-                             "job_ids": [], "anomaly": None}
+                             "job_ids": [], "anomaly": None, "skipped_deleted": 0}
     seen_ids: set[int] = set()
     for data in items:
         if not data.title:
+            continue
+        if job_delete.is_deleted(session, source, data):  # you deleted it: don't add it back
+            stats["skipped_deleted"] += 1
             continue
         job, outcome = upsert(session, source, data, method)
         stats[outcome] += 1
@@ -483,6 +489,10 @@ def collect_all(session: Session, settings: Settings, http: PoliteHttp | None = 
         if stats["status"] in ("failed", "unavailable"):
             summary["failed"] += 1
     summary["matched"] = 0 if dry_run else matching.match_pending(session)
+    if not dry_run and settings_store.get(session, "job_cleanup")["auto"]:
+        from jobpilot.services import cleanup
+
+        summary["hidden"] = cleanup.run(session, trigger=trigger)["hidden"]
     summary["requests"] = http.request_count
     prefix = "DRY RUN (nothing saved): " if dry_run else ""
     summary["message"] = f"{prefix}{summary['new']} new job(s); {summary['failed']} source(s) failed or unavailable"
@@ -543,6 +553,9 @@ def add_manual(session: Session, data: ManualJobIn) -> tuple[Job, str]:
         values[k] = str(values[k]) if values[k] else None
     source = get_or_create_source(session, MANUAL_SOURCE, "manual")
     job, outcome = upsert(session, source, JobData(raw={"manual": True}, **values), "manual")
+    from jobpilot.services import job_delete
+
+    job_delete.forget(session, job)  # added by you: no longer "deleted"
     matching.match_job(session, job)
     audit.record(session, f"job.manual.{outcome}", "job", job.id)
     return job, outcome
@@ -557,6 +570,9 @@ def add_from_url(session: Session, http: PoliteHttp, url: str, company_name: str
         raise ValueError("Could not find a job title at that URL")
     source = get_or_create_source(session, MANUAL_SOURCE, "manual")
     job, outcome = upsert(session, source, data, method)
+    from jobpilot.services import job_delete
+
+    job_delete.forget(session, job)
     if warnings:
         job.notes = ((job.notes or "") + "\nImport warnings: " + "; ".join(warnings)).strip()
     matching.match_job(session, job)
@@ -593,16 +609,30 @@ SORTS = {
 def search(session: Session, *, q: str | None = None, status: str | None = "active", category: str | None = None,
            eligibility: str | None = None, remote: str | None = None, user_status: str | None = None,
            min_score: float | None = None, source_id: int | None = None, posted_within_days: int | None = None,
-           region: str | None = None, applied: str | None = None, sort: str = "relevance", limit: int = 100,
-           offset: int = 0) -> tuple[list[Job], int]:
-    """``applied``: "yes" = only jobs you've recorded as applied, "no" = only jobs you haven't."""
+           region: str | None = None, applied: str | None = None, level: str | None = None,
+           roles_only: bool = False, hidden: str | None = None, sort: str = "relevance", limit: int = 100,
+           offset: int = 0, sector: str | None = None) -> tuple[list[Job], int]:
+    """``applied``: "yes" = only jobs you've recorded as applied, "no" = only jobs you haven't.
+
+    ``q``: a search query (services/search_query.py: words, "phrases", -exclusions, title:/company:/in:/skill:,
+    skill synonyms), ranked by where it matched when ``sort`` is "relevance".
+    ``region``: one region, or "mine" = India, remote (open to you) or Dubai. ``level`` (services/levels.py):
+    "fresher" = fresher / SDE-1 or not stated, "fresher_stated" = fresher / SDE-1 only. ``roles_only``: only jobs in
+    one of your role categories. ``sector``: "fintech" = only fintech, bank and exchange companies (services/sectors.py).
+    """
     from sqlalchemy import func
 
+    from jobpilot.services import search_query
+
+    query = search_query.parse(q) if q else None
     stmt = select(Job)
-    if q:
-        like = f"%{q.lower()}%"
-        stmt = stmt.where(or_(func.lower(Job.title).like(like), func.lower(Job.company_name).like(like),
-                              func.lower(Job.location).like(like), func.lower(Job.description_text).like(like)))
+    if query and query.terms:
+        # Cheap SQL pre-filter (each positive term, or one of its synonyms, appears somewhere); the exact
+        # whole-word / field / exclusion matching and ranking happen in Python below.
+        text_cols = [func.lower(Job.title), func.lower(Job.company_name), func.lower(Job.location),
+                     func.lower(Job.description_text)]
+        for variants in search_query.like_prefilter(query):
+            stmt = stmt.where(or_(*(c.like(f"%{v}%") for v in variants for c in text_cols)))
     if status:
         stmt = stmt.where(Job.status == status)
     if category:
@@ -613,7 +643,21 @@ def search(session: Session, *, q: str | None = None, status: str | None = "acti
         stmt = stmt.where(Job.remote_type == remote)
     if region in (*regions.REGIONS, "other"):
         stmt = stmt.where(Job.regions.like(f"%,{region},%"))
-    if user_status:
+    elif region == "mine":
+        stmt = stmt.where(or_(*(Job.regions.like(f"%,{r},%") for r in regions.REGIONS)))
+    if level == "fresher":
+        stmt = stmt.where(or_(Job.level_fit.is_(None), Job.level_fit != "no"))
+    elif level == "fresher_stated":
+        stmt = stmt.where(Job.level_fit == "fit")
+    if roles_only and not category:
+        stmt = stmt.where(Job.category.is_not(None))
+    if sector == "fintech":
+        from jobpilot.services import sectors
+
+        stmt = stmt.where(sectors.fintech_clause(Job.company_name))
+    if hidden == "cleanup":  # what the relevance cleanup hid
+        stmt = stmt.where(Job.hidden_reason.like("cleanup:%"))
+    elif user_status:
         stmt = stmt.where(Job.user_status == user_status)
     else:
         stmt = stmt.where(Job.user_status != "dismissed")
@@ -629,15 +673,26 @@ def search(session: Session, *, q: str | None = None, status: str | None = "acti
 
         applied_ids = select(Application.job_id).where(Application.applied_at.is_not(None))
         stmt = stmt.where(Job.id.in_(applied_ids) if applied == "yes" else Job.id.not_in(applied_ids))
-    total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    stmt = stmt.order_by(*SORTS.get(sort, SORTS["relevance"])).limit(limit).offset(offset)
-    return list(session.scalars(stmt)), total
+    stmt = stmt.order_by(*SORTS.get(sort, SORTS["relevance"]))
+    if query and query.terms:
+        hits = []
+        for job in session.scalars(stmt):
+            ok, rank, info = search_query.match(query, job)
+            if ok:
+                job.search_info = info  # transient: where it matched, and a snippet (for the Jobs page)
+                hits.append((rank, job))
+        if sort == "relevance":  # stable: ties keep the score order from SQL
+            hits.sort(key=lambda h: -h[0])
+        return [j for _, j in hits[offset:offset + limit]], len(hits)
+    total = session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+    return list(session.scalars(stmt.limit(limit).offset(offset))), total
 
 
 def set_user_status(session: Session, job: Job, status: str) -> None:
     if status not in ("new", "shortlisted", "dismissed"):
         raise ValueError("Invalid status")
     job.user_status = status
+    job.hidden_reason = None  # your own choice replaces the cleanup's
     audit.record(session, f"job.{status}", "job", job.id)
 
 

@@ -38,6 +38,7 @@ KIND_LABELS = {
     "thank_you": "Thank-you (after interview)",
     "status_inquiry": "Application status inquiry",
     "gmail_test": "Gmail connection test",
+    "application": "Job application (Apply agent)",
 }
 
 _SIGNATURE = "{{ candidate.full_name }}{% if candidate.email %}\n{{ candidate.email }}{% endif %}" \

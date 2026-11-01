@@ -51,6 +51,35 @@ def cmd_add_url(args) -> int:
     return 0
 
 
+def cmd_cleanup(args) -> int:
+    """Preview (default), hide (--apply) or restore (--undo) irrelevant jobs. Never deletes anything."""
+    from jobpilot.cli import _ctx
+    from jobpilot.services import cleanup
+
+    _, _, factory = _ctx()
+    with factory() as s:
+        if args.undo:
+            n = cleanup.undo(s)
+            s.commit()
+            print(f"Restored {n} job(s) the cleanup had hidden")
+            return 0
+        p = cleanup.plan(s)
+        print(f"{len(p['hide'])} irrelevant job(s) (min score {p['min_score']:g}); "
+              "never touched: applied, saved or already dismissed jobs")
+        for key, n in p["by_reason"].items():
+            print(f"  {n:4d}  {cleanup.REASONS[key]}")
+        if args.verbose:
+            for job, r in p["hide"]:
+                print(f"  - #{job.id} {job.title[:70]} — {job.company_name or '?'} ({', '.join(cleanup.REASONS[k] for k in r)})")
+        if not args.apply:
+            print("Preview only. Run with --apply to hide them (reversible with --undo).")
+            return 0
+        res = cleanup.run(s, trigger="cli")
+        s.commit()
+        print(f"Hid {res['hidden']} job(s). Restore with: jobpilot cleanup --undo")
+    return 0
+
+
 def cmd_rematch(args) -> int:
     from jobpilot.cli import _ctx
     from jobpilot.services import matching
@@ -129,6 +158,13 @@ def register(sub) -> None:
 
     sub.add_parser("rematch", help="Re-score all active jobs").set_defaults(func=cmd_rematch)
 
+    s = sub.add_parser("cleanup", help="Hide jobs that aren't fresher / SDE-1, in India / Dubai / remote, in your "
+                                       "roles (preview by default; reversible; never deletes)")
+    s.add_argument("--apply", action="store_true", help="Hide them (default: only show what would be hidden)")
+    s.add_argument("--undo", action="store_true", help="Restore every job the cleanup hid")
+    s.add_argument("-v", "--verbose", action="store_true", help="List each job")
+    s.set_defaults(func=cmd_cleanup)
+
     s = sub.add_parser("assist", help="Open a browser to help fill an application (never submits)")
     s.add_argument("application_id", type=int)
     s.add_argument("--no-wait", action="store_true", help="Close the browser right after filling")
@@ -141,7 +177,13 @@ def register(sub) -> None:
     s.add_argument("--apply", action="store_true", help="Add them (existing sources of the same name are kept)")
     s.set_defaults(func=cmd_regional_sources)
 
-    from jobpilot import cli_hub, cli_ops, cli_recruiters, cli_resume, cli_telegram
+    from jobpilot import cli_agents, cli_hub, cli_ops, cli_recruiters, cli_resume, cli_telegram
+
+    cli_agents.register(sub)
+
+    from jobpilot import cli_assistant
+
+    cli_assistant.register(sub)
 
     cli_ops.register(sub)
     cli_hub.register(sub)

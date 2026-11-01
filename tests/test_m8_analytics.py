@@ -26,6 +26,10 @@ def _board(n):
 
 def test_collection_resume_selection_and_skill_gap_reports(db, settings):
     seed_profile(db)
+    # Numbered synthetic titles ("Engineer 2") read as SDE-2 levels; this test is about analytics, not the cleanup.
+    from jobpilot.services import settings_store
+
+    settings_store.put(db, "job_cleanup", {"auto": False, "min_score": 40})
     job_svc.save_source(db, job_svc.SourceIn(name="Examplecorp", kind="greenhouse", company_name="Examplecorp",
                                              config={"board_token": "examplecorp"}))
     job_svc.collect_all(db, settings, make_http(settings, {GH: (200, _board(3))}))

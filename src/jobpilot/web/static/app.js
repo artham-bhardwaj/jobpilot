@@ -11,13 +11,17 @@ document.addEventListener("submit", (ev) => {
   // GET forms (search/filters) are left alone.
   if ((form.method || "get").toLowerCase() === "post" && submitter && submitter.tagName === "BUTTON") {
     submitter.setAttribute("aria-busy", "true");
+    if (submitter.dataset.busyLabel) { submitter.dataset.idleLabel = submitter.textContent; submitter.textContent = submitter.dataset.busyLabel; }
     setTimeout(() => { submitter.disabled = true; }, 0);  // after the browser has captured the form data
   }
 });
 
 // Back/forward cache: never show a button stuck in its busy state.
 window.addEventListener("pageshow", () => {
-  document.querySelectorAll('button[aria-busy="true"]').forEach((b) => { b.disabled = false; b.removeAttribute("aria-busy"); });
+  document.querySelectorAll('button[aria-busy="true"]').forEach((b) => {
+    b.disabled = false; b.removeAttribute("aria-busy");
+    if (b.dataset.idleLabel) b.textContent = b.dataset.idleLabel;
+  });
 });
 
 document.addEventListener("click", async (ev) => {
@@ -39,4 +43,26 @@ document.addEventListener("click", async (ev) => {
 document.addEventListener("click", (ev) => {
   const back = ev.target.closest("[data-back]");
   if (back && window.history.length > 1) { ev.preventDefault(); window.history.back(); }
+});
+
+// Search: "/" jumps to the search box; changing a filter dropdown applies it straight away.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "/" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const t = ev.target;
+  if (t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
+  const box = document.getElementById("job-q");
+  if (box) { ev.preventDefault(); box.focus(); box.select(); }
+});
+document.addEventListener("change", (ev) => {
+  const form = ev.target.form;
+  if (form && form.hasAttribute("data-autosubmit") && ev.target.tagName === "SELECT") form.requestSubmit();
+});
+
+// Theme toggle (topbar): dark by default, light on request; remembered in this browser only.
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest("[data-theme-toggle]")) return;
+  const root = document.documentElement;
+  const next = root.dataset.theme === "light" ? "dark" : "light";
+  root.dataset.theme = next;
+  try { localStorage.setItem("jobpilot-theme", next); } catch (e) { /* storage blocked: applies to this page only */ }
 });

@@ -8,7 +8,11 @@ What it does:
 - Pauses — fills nothing further — on CAPTCHA, login, MFA/verification-code prompts or
   security checks, and lists unknown questions, consent boxes and legal/EEO declarations
   for you to answer yourself.
-- **Never clicks submit** and never ticks checkboxes. You review and submit in the window.
+- The assisted window (``jobpilot assist``) **never clicks submit** and never ticks checkboxes: you review and
+  submit in the window.
+- The Apply agent (``submit_page`` / ``run_submission``) clicks submit only when the page has no CAPTCHA / bot
+  check / login / verification prompt, every required field holds a confirmed fact or approved answer (so required
+  consent and legal boxes always stop it), and there is exactly one submit control. Anything else comes to you.
 - If a confirmation page appears, its text and a screenshot are saved as *candidate*
   evidence; you still confirm the submission in JobPilot.
 
@@ -1055,3 +1059,112 @@ def manual_fields(session: Session) -> list[tuple[str, str]]:
 
 def summarize(values: dict[str, Any]) -> str:
     return ", ".join(sorted(values))
+
+
+# ---- unattended submission (Apply agent) ------------------------------------------------------------------------
+# Used only by the Apply agent, and only where every condition holds right before the click: no CAPTCHA / bot check
+# (visible or invisible), login or verification prompt; every required field filled from confirmed facts or approved
+# answers (an unticked required consent box counts as missing, so legal declarations always come to you); exactly one
+# submit control; and the agent's own re-check (``before_click``) passes. The attempt is recorded before the click.
+
+def submit_page(page, values: dict[str, str], resume_path: Path | None, answer_for, before_click,
+                timeout_s: float = 30.0) -> dict[str, Any]:
+    """Fill a loaded form and submit it if, and only if, it is safe. Testable against any page.
+
+    Stages: blocked (a check only you can pass), incomplete (required fields without an approved value),
+    unsupported_form (not exactly one submit control), vetoed (``before_click`` said no), submitted (with
+    ``outcome`` confirmed / failed / uncertain from the page after the click)."""
+    blockers = detect_blockers(page)
+    if blockers:
+        return {"stage": "blocked", "detail": "; ".join(blockers)}
+    res = assist_page(page, values, resume_path, answer_for=answer_for, stop_on_blockers=True)
+    out: dict[str, Any] = {"filled": list(res.filled), "missing": [], "sensitive": list(res.sensitive)}
+    blockers = detect_blockers(page)  # some checks load only after the form is touched
+    if blockers:
+        return {**out, "stage": "blocked", "detail": "; ".join(blockers)}
+    missing = missing_required(page)
+    if missing:
+        return {**out, "stage": "incomplete", "missing": missing,
+                "detail": f"{len(missing)} required field(s) without an approved value: " + "; ".join(missing[:8])}
+    submits = find_submit(page)
+    if len(submits) != 1:
+        return {**out, "stage": "unsupported_form", "detail": f"{len(submits)} submit controls (need exactly 1)"}
+    try:
+        out["before_png"] = page.screenshot(full_page=True)
+    except Exception:
+        out["before_png"] = None
+    if not before_click():
+        return {**out, "stage": "vetoed", "detail": "a check failed right before the click"}
+    start = page.url
+    page.click('[data-jobpilot-submit="0"]', timeout=10000)
+    result = classify_outcome(page, start, timeout_s=timeout_s)
+    try:
+        out["after_png"] = page.screenshot(full_page=True)
+    except Exception:
+        out["after_png"] = None
+    return {**out, **result, "stage": "submitted"}
+
+
+def _open_form(pw, settings: Settings, url: str, headless: bool):
+    browser = pw.chromium.launch(channel=settings.browser_channel or None, headless=headless,
+                                 args=["--disable-extensions"])
+    page = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    try:  # forms are rendered by scripts: let them finish before looking for fields
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
+    return browser, page
+
+
+def run_submission(settings: Settings, url: str, values: dict[str, str], resume_path: Path | None, answer_for,
+                   before_click, headless: bool = True) -> dict[str, Any]:
+    """Open ``url`` in a fresh headless browser and run :func:`submit_page`. Never raises."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"stage": "browser_unavailable", "detail": "Playwright not installed (pip install -e '.[browser]')"}
+    with sync_playwright() as pw:
+        try:
+            browser, page = _open_form(pw, settings, url, headless)
+        except Exception as exc:
+            return {"stage": "browser_unavailable", "detail": f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"}
+        try:
+            return submit_page(page, values, resume_path, answer_for, before_click)
+        except Exception as exc:
+            log.exception("submission failed")
+            return {"stage": "error", "detail": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+
+def rehearse_form(settings: Settings, url: str, values: dict[str, str], resume_available: bool, answer_for,
+                  headless: bool = True) -> dict[str, Any]:
+    """Dry run: open the form and report what a submission would fill (:func:`plan_page`). Types, uploads and
+    clicks nothing. Never raises."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"stage": "browser_unavailable", "detail": "Playwright not installed (pip install -e '.[browser]')"}
+    with sync_playwright() as pw:
+        try:
+            browser, page = _open_form(pw, settings, url, headless)
+        except Exception as exc:
+            return {"stage": "browser_unavailable", "detail": f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"}
+        try:
+            plan = plan_page(page, values, resume_available, answer_for)
+            try:
+                plan["png"] = page.screenshot(full_page=True)
+            except Exception:
+                plan["png"] = None
+            return {**plan, "stage": "planned"}
+        except Exception as exc:
+            return {"stage": "error", "detail": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass

@@ -104,13 +104,13 @@ class TelegramClient:
     def __repr__(self) -> str:  # never show the token
         return "TelegramClient(token=<hidden>)"
 
-    def call(self, method: str, payload: dict | None = None, timeout: float = TIMEOUT) -> Any:
+    def call(self, method: str, payload: dict | None = None, timeout: float = TIMEOUT, files: dict | None = None) -> Any:
         """POST a Bot API method; retries network errors, 429 (honouring retry_after) and 5xx."""
         attempt = 0
         while True:
             attempt += 1
             try:
-                err = self._once(method, payload or {}, timeout)
+                err = self._once(method, payload or {}, timeout, files)
             except TelegramError as exc:
                 err = exc
             if isinstance(err, TelegramError):
@@ -122,10 +122,13 @@ class TelegramClient:
                 continue
             return err
 
-    def _once(self, method: str, payload: dict, timeout: float) -> Any:
+    def _once(self, method: str, payload: dict, timeout: float, files: dict | None = None) -> Any:
         url = f"{API}/bot{self._token}/{method}"
         try:
-            r = self.http.post(url, json=payload, timeout=timeout)
+            if files:  # multipart upload (sendDocument): form fields + the file
+                r = self.http.post(url, data=payload, files=files, timeout=timeout)
+            else:
+                r = self.http.post(url, json=payload, timeout=timeout)
         except requests.Timeout:
             return TelegramError(f"Telegram {method}: timed out", retryable=True)
         except requests.RequestException as exc:  # message would contain the URL: report only the type
@@ -153,6 +156,17 @@ class TelegramClient:
         elif r.status_code == 409:
             hint = " — another program is reading this bot's updates (only one may poll at a time)"
         return TelegramError(f"Telegram {method}: {desc}{hint}", status=r.status_code)
+
+    def send_document(self, data: bytes, filename: str, caption: str = "", chat_id: str | None = None) -> int | None:
+        """Send a file (as a document) to the configured chat. Returns Telegram's message id."""
+        chat = chat_id or self.settings.telegram_chat_id
+        if not chat:
+            raise TelegramError("JOBPILOT_TELEGRAM_CHAT_ID is not set")
+        if len(data) > 49 * 1024 * 1024:
+            raise TelegramError("File too large for Telegram (50 MB limit)")
+        res = self.call("sendDocument", {"chat_id": str(chat), "caption": caption[:1000]}, timeout=60,
+                        files={"document": (filename, data)})
+        return (res or {}).get("message_id")
 
     def get_me(self) -> dict:
         return self.call("getMe")

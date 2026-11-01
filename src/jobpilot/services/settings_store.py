@@ -110,6 +110,36 @@ DEFAULTS: dict[str, Any] = {
         "compile_timeout_s": 90,
         "min_description_chars": 400,
         "template": None,
+        # Use the posting's spelling of skills you already list (pure synonyms only, checked by the validator).
+        "reword_skills": True,
+    },
+    # The four agents (Search, Resume, Apply, Manager): see docs/AGENTS.md. The Manager runs them as the
+    # scheduler task "agents". apply_mode "dry_run" does everything except send or submit; "auto" applies.
+    # Relevance cleanup (services/cleanup.py): hide jobs that aren't fresher / SDE-1, in India / Dubai / remote, in
+    # your role categories and at least min_score. Reversible; never touches jobs you applied to, saved or dismissed.
+    # auto: also run after every collection, so irrelevant new jobs never reach the Jobs page, agents or Telegram.
+    # sde_backend_only: also hide jobs whose title isn't an SDE / backend role (services/roles.py).
+    "job_cleanup": {"auto": True, "min_score": 40, "sde_backend_only": True},
+    "agents": {
+        "apply_mode": "dry_run",
+        "min_score": 70,
+        "allowed_eligibility": ["eligible", "likely_eligible"],
+        "job_families": [],
+        "max_job_age_days": 30,
+        "max_per_cycle": 5,
+        "daily_limit": 10,
+        "email_applications": True,
+        "form_submissions": True,
+        "allowed_platforms": ["greenhouse", "lever", "ashby"],
+        "use_answer_bank": True,
+        "hold_dream_companies": True,
+        "fallback_to_master_resume": True,
+        "search_every_hours": 6,
+        "add_feed_sources": True,
+        "discover_boards": True,
+        "max_board_checks": 10,
+        "job_alert_emails": True,
+        "digest": True,
     },
     "apollo": {
         "enabled": False,                  # API mode off until you turn it on (and set JOBPILOT_APOLLO_API_KEY)
@@ -125,7 +155,8 @@ DEFAULTS: dict[str, Any] = {
         "kinds": {"high_match": True, "relevant_digest": False, "draft_review": False, "application_status": True,
                   "reply": True, "follow_up": True, "daily_summary": True, "task_failure": True, "source_failure": True,
                   "questions": False, "recruiter_found": False, "outreach_gmail": True, "bounce": True,
-                  "recruiter_needed": False, "outreach_sent": True, "apply_check": False, "email_outcome": True},
+                  "recruiter_needed": False, "outreach_sent": True, "apply_check": False, "email_outcome": True,
+                  "agents_digest": True},
         # null = use the matching settings (relevance_threshold / strong_threshold).
         "relevant_min_score": None,
         "high_match_min_score": None,
@@ -147,6 +178,8 @@ DEFAULTS: dict[str, Any] = {
             # Scan for new events and deliver Telegram notifications (only when Telegram is configured).
             "notify": {"enabled": False, "every_hours": 0.25},
             "outreach": {"enabled": False, "every_hours": 6},
+            # The Manager agent's cycle: search → tailored resumes → apply (or hand to you). See docs/AGENTS.md.
+            "agents": {"enabled": False, "every_hours": 3},
         },
         # Reminders: how early to warn about a stated deadline, and when a submitted application with no
         # recorded update is worth checking on (never treated as a rejection).
@@ -291,7 +324,7 @@ class ScheduledTask(BaseModel):
 NOTIFY_KINDS = Literal["high_match", "relevant_digest", "draft_review", "application_status", "reply", "follow_up",
                        "daily_summary", "task_failure", "source_failure", "questions", "recruiter_found",
                        "outreach_gmail", "bounce", "recruiter_needed", "outreach_sent", "apply_check",
-                       "email_outcome"]
+                       "email_outcome", "agents_digest"]
 
 
 class TailoredResumeSettings(BaseModel):
@@ -302,6 +335,37 @@ class TailoredResumeSettings(BaseModel):
     compile_timeout_s: int = Field(default=90, ge=10, le=600)
     min_description_chars: int = Field(default=400, ge=50, le=20_000)
     template: dict[str, Any] | None = None
+    reword_skills: bool = True
+
+
+class JobCleanupSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    auto: bool = True
+    min_score: float = Field(default=40, ge=0, le=100)
+    sde_backend_only: bool = True
+
+
+class AgentSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    apply_mode: Literal["dry_run", "auto"] = "dry_run"
+    min_score: float = Field(default=70, ge=0, le=100)
+    allowed_eligibility: list[Literal["eligible", "likely_eligible", "unknown"]] = ["eligible", "likely_eligible"]
+    job_families: list[str] = Field(default_factory=list, max_length=20)
+    max_job_age_days: int = Field(default=30, ge=1, le=365)
+    max_per_cycle: int = Field(default=5, ge=1, le=25)
+    daily_limit: int = Field(default=10, ge=0, le=40)
+    email_applications: bool = True
+    form_submissions: bool = True
+    allowed_platforms: list[Literal["greenhouse", "lever", "ashby"]] = ["greenhouse", "lever", "ashby"]
+    use_answer_bank: bool = True
+    hold_dream_companies: bool = True
+    fallback_to_master_resume: bool = True
+    search_every_hours: float = Field(default=6, ge=1, le=168)
+    add_feed_sources: bool = True
+    discover_boards: bool = True
+    max_board_checks: int = Field(default=10, ge=0, le=50)
+    job_alert_emails: bool = True
+    digest: bool = True
 
 
 class TrackerSettings(BaseModel):
@@ -343,7 +407,7 @@ class SchedulerSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     keep_backups: int = Field(default=14, ge=1, le=365)
     tasks: dict[Literal["collect_jobs", "followup_check", "maintenance", "backup", "gmail_sync", "rematch", "reminders",
-                        "health_check", "notify", "outreach"], ScheduledTask] = {}
+                        "health_check", "notify", "outreach", "agents"], ScheduledTask] = {}
     deadline_warning_days: int = Field(default=3, ge=1, le=30)
     stale_application_days: int = Field(default=21, ge=3, le=120)
 
@@ -380,6 +444,8 @@ _VALIDATORS = {
     "apollo": ApolloSettings.model_validate,
     "tracker": TrackerSettings.model_validate,
     "tailored_resumes": TailoredResumeSettings.model_validate,
+    "agents": AgentSettings.model_validate,
+    "job_cleanup": JobCleanupSettings.model_validate,
     "role_categories": lambda v: {k: RoleCategory.model_validate(c) for k, c in TypeAdapter(dict).validate_python(v).items()},
 }
 

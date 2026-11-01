@@ -17,7 +17,9 @@ BOT_COMMANDS = [("/menu", "Buttons for everything"), ("/status", "System health 
                 ("/outcomes", "Application status changes"), ("/applications", "Applications by status"),
                 ("/recruiters", "Recruiter contacts"), ("/outreach", "Recruiter emails"),
                 ("/outreach_pending", "Emails waiting for you"), ("/today", "Today's summary"),
-                ("/pause", "Pause automatic recruiter outreach"), ("/resume", "Restart it"), ("/help", "All commands")]
+                ("/pause", "Pause automatic recruiter outreach"), ("/resume", "Restart it"),
+                ("/usage", "Claude plan limits and assistant use"), ("/new", "New conversation with Claude"),
+                ("/help", "All commands")]
 
 
 def _out(data) -> None:

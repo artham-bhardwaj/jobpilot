@@ -76,6 +76,7 @@
     {{ post_button("/jobs/" ~ job.id ~ "/rematch", "Re-score", "small") }}
     {{ post_button("/jobs/" ~ job.id ~ "/check", "Check still open", "small") }}
     {% if job.status == "active" %}{{ post_button("/jobs/" ~ job.id ~ "/expire", "Mark expired", "small", confirm="Mark this job as expired?") }}{% endif %}
+    {% if not application %}{{ post_button("/desk/" ~ job.id ~ "/delete", "Delete job", "small danger", confirm="Delete this job for good? Its tailored resumes go too, and your sources won't add it again.", hidden={"next": "/jobs"}) }}{% endif %}
   </div>
 </details>
 

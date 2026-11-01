@@ -2,85 +2,219 @@
 {% from "_macros.html" import badge, empty, score %}
 {% block title %}Jobs{% endblock %}
 {% block content %}
-<h1>Jobs</h1>
-<div class="actions" style="margin:-6px 0 12px">
-  <a class="button primary" href="/jobs/new">Add / import jobs</a>
-  <a class="button" href="/sources">Sources</a>
-  <form method="post" action="/jobs/rematch" class="inline"><button>Re-score all</button></form>
-  <span class="muted small">Only jobs from your configured sources and imports — not the whole internet.</span>
-</div>
+{% macro qlink(qs, key, value) -%}{{ base }}?{{ qs }}{% if value %}{{ '&' if qs else '' }}{{ key }}={{ value|urlencode }}{% endif %}{%- endmacro %}
+{% set here = request.url.path ~ '?' ~ request.url.query %}
+
+<header class="page-head">
+  <div>
+    <h1>{% if hidden_view %}Hidden by cleanup{% elif sector == "fintech" %}Fintech jobs{% else %}Jobs{% endif %}</h1>
+    <p class="lede">
+      {% if hidden_view %}Jobs the relevance cleanup hid, with the reason. Nothing was deleted; restore any you want back.
+      {% else %}
+      {% if level == "any" %}All levels{% else %}Fresher &amp; SDE-1 roles{% endif %}
+      {% if region %}in {{ {"india": "India", "remote": "remote (open to you)", "dubai": "Dubai / UAE", "other": "other places", "any": "any region"}[region] or region }}
+      {% else %}in India, Dubai and remote{% endif %}
+      {% if roles != "any" %}· your target roles{% endif %}
+      {% if sector == "fintech" %}· at fintech, banks, exchanges and trading firms{% endif %}
+      {% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    {% if hidden_view %}
+      <a class="button" href="/jobs">← Back to jobs</a>
+      {% if cleaned %}<form method="post" action="/jobs/cleanup/undo" class="inline" data-confirm="Restore all {{ cleaned }} job(s) the cleanup hid?"><button>Restore all {{ cleaned }}</button></form>{% endif %}
+    {% else %}
+      <a class="button primary" href="/jobs/new">Add / import jobs</a>
+      <a class="button" href="/sources">Sources</a>
+      <form method="post" action="/jobs/rematch" class="inline"><button>Re-score all</button></form>
+    {% endif %}
+    {% if total %}
+      <a class="button" href="/jobs/export.pdf{{ '?' ~ export_qs if export_qs }}" download title="Download all {{ total }} job(s) with these filters: title, company, location and apply link">Export PDF</a>
+      <a class="button" href="/jobs/export.xlsx{{ '?' ~ export_qs if export_qs }}" download title="Download all {{ total }} job(s) with these filters as an Excel sheet">Export Excel</a>
+    {% endif %}
+  </div>
+</header>
+
+{% if not hidden_view %}
+<section class="focus-bar card" aria-label="Your focus">
+  <div class="focus-group">
+    <span class="focus-label">Experience</span>
+    <div class="seg" role="group" aria-label="Experience level">
+      {% for key, label, tip in levels %}
+        <a href="{{ qlink(level_qs, 'level', '' if key == 'fresher' else key) }}" title="{{ tip }}" class="{{ 'on' if level == key else '' }}"{% if level == key %} aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="focus-group">
+    <span class="focus-label">Roles</span>
+    <div class="seg" role="group" aria-label="Role categories">
+      <a href="{{ qlink(roles_qs, 'roles', '') }}" class="{{ 'on' if roles != 'any' else '' }}" title="{{ categories.values()|map(attribute='label')|join(', ') }}">My target roles</a>
+      <a href="{{ qlink(roles_qs, 'roles', 'any') }}" class="{{ 'on' if roles == 'any' else '' }}">All roles</a>
+    </div>
+  </div>
+  <div class="focus-group cleanup-group">
+    {% if cleanup_preview %}
+      <form method="post" action="/jobs/cleanup" class="inline" data-confirm="Hide {{ cleanup_preview }} irrelevant job(s)? Nothing is deleted; jobs you applied to or saved are never touched, and you can restore them.">
+        <button class="small" title="Hide jobs above SDE-1, outside India / Dubai / remote, outside your roles, or with a low score">Clean up {{ cleanup_preview }} irrelevant</button></form>
+    {% endif %}
+    {% if cleaned %}<a class="small" href="/jobs?hidden=cleanup">Hidden by cleanup ({{ cleaned }})</a>{% endif %}
+  </div>
+  {% if hidden.level or hidden.roles %}
+  <p class="focus-note muted small">
+    Not shown: {% if hidden.level %}<b>{{ hidden.level }}</b> above SDE-1{% endif %}{% if hidden.level and hidden.roles %} and {% endif %}{% if hidden.roles %}<b>{{ hidden.roles }}</b> outside your roles{% endif %}.
+  </p>
+  {% endif %}
+</section>
 
 <nav class="region-tabs" aria-label="Region">
-  {% for key, label in [("", "All"), ("india", "India"), ("remote", "Remote"), ("dubai", "Dubai / UAE"), ("other", "Elsewhere")] %}
-    <a href="/jobs?{{ tab_qs }}{% if key %}{{ '&' if tab_qs else '' }}region={{ key }}{% endif %}" class="{{ 'on' if (filters.region or '') == key else '' }}">{{ label }} <span class="n">{{ region_counts[key or "all"] }}</span></a>
+  {% for key, label in region_tabs %}
+    <a href="{{ qlink(tab_qs, 'region', key) }}" class="{{ 'on' if region == key else '' }}"{% if region == key %} aria-current="page"{% endif %}>{{ label }} <span class="n">{{ region_counts[key] }}</span></a>
   {% endfor %}
 </nav>
+{% endif %}
 
-{% set more_set = filters.category or filters.eligibility or filters.remote or filters.posted_within_days or filters.user_status or (filters.status or "") != "active" or filters.source_id %}
-<form method="get" action="/jobs" class="filters card">
-  {% if filters.region %}<input type="hidden" name="region" value="{{ filters.region }}">{% endif %}
-  <label class="field grow2"><span>Search</span><input type="search" name="q" value="{{ filters.q or '' }}" placeholder="title, company, text"></label>
-  <label class="field"><span>Applied?</span><select name="applied">
-    {% for v, l in [("","any"),("no","not applied yet"),("yes","applied")] %}<option value="{{ v }}" {% if (filters.applied or "") == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
-  <label class="field"><span>Min score</span><input type="number" name="min_score" min="0" max="100" value="{{ filters.min_score if filters.min_score is not none else '' }}" placeholder="{{ threshold }}"></label>
-  <label class="field"><span>Sort</span><select name="sort">
-    {% for v in ["relevance","newest","posted","company","title"] %}<option {% if filters.sort == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+{% set more_set = filters.category or filters.eligibility or filters.remote or filters.user_status or (filters.status or "") != "active" or filters.source_id %}
+<form method="get" action="{{ base }}" class="search-panel card" role="search" data-autosubmit>
+  {% if hidden_view %}<input type="hidden" name="hidden" value="cleanup">
+  {% else %}
+  {% if region %}<input type="hidden" name="region" value="{{ region }}">{% endif %}
+  {% if level != "fresher" %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
+  {% if roles == "any" %}<input type="hidden" name="roles" value="any">{% endif %}
+  {% endif %}
+  <div class="search-row">
+    <label class="search-box">
+      <span class="visually-hidden">Search jobs</span>
+      <svg aria-hidden="true" viewBox="0 0 20 20" width="18" height="18"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input type="search" name="q" id="job-q" value="{{ filters.q or '' }}" autocomplete="off" spellcheck="false"
+             placeholder='Try: java spring -senior · company:amazon · "low level design" · in:pune' aria-describedby="search-help">
+      <kbd class="search-kbd" title="Press / to search">/</kbd>
+    </label>
+    <button class="primary">Search</button>
+    {% if filters.q or more_set or filters.applied or filters.min_score is not none or filters.posted_within_days %}<a href="/jobs{{ '?hidden=cleanup' if hidden_view else '' }}" class="button ghost">Clear</a>{% endif %}
+  </div>
+
+  {% if query.terms %}
+  <div class="query-pills" aria-label="Your search (select a term to remove it)">
+    {% for t in query.terms %}
+      <a class="pill{{ ' neg' if t.negate else '' }}" href="{{ qlink(noq_qs, 'q', query.without(loop.index0)) }}" title="Remove {{ t.display() }}">
+        {% if t.negate %}<span class="pill-field">not</span>{% endif %}{% if t.field %}<span class="pill-field">{{ t.field }}</span>{% endif %}{{ t.text }}
+        {% if t.variants|length > 1 and not t.negate %}<span class="pill-syn" title="Also matches: {{ t.variants[1:]|join(', ') }}">+{{ t.variants|length - 1 }}</span>{% endif %}
+        <span class="pill-x" aria-hidden="true">×</span></a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if skill_chips and not hidden_view %}
+  <div class="skill-chips" aria-label="Your skills these jobs ask for most">
+    <span class="focus-label">Your skills</span>
+    {% for sk in skill_chips %}
+      {% set on = query.terms|selectattr('text', 'equalto', sk)|list %}
+      {% if on %}<span class="chip on" aria-current="true">{{ sk }}</span>
+      {% else %}<a class="chip" href="{{ qlink(noq_qs, 'q', ((filters.q or '') ~ ' ' ~ ('"' ~ sk ~ '"' if ' ' in sk else sk))|trim) }}">{{ sk }}</a>{% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="filters-row">
+    <label class="field"><span>Applied?</span><select name="applied">
+      {% for v, l in [("","any"),("no","not applied yet"),("yes","applied")] %}<option value="{{ v }}" {% if (filters.applied or "") == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+    <label class="field"><span>Min score</span><input type="number" name="min_score" min="0" max="100" value="{{ filters.min_score if filters.min_score is not none else '' }}" placeholder="{{ threshold }}"></label>
+    <label class="field"><span>Posted within</span><select name="posted_within_days"><option value="">any time</option>
+      {% for d in [1,3,7,14,30] %}<option value="{{ d }}" {% if filters.posted_within_days == d %}selected{% endif %}>{{ d }} day{{ 's' if d > 1 }}</option>{% endfor %}</select></label>
+    <label class="field"><span>Sort</span><select name="sort">
+      {% for v, l in [("relevance","best match"),("newest","newest seen"),("posted","recently posted"),("company","company"),("title","title")] %}<option value="{{ v }}" {% if filters.sort == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+  </div>
   <details class="more-filters"{% if more_set %} open{% endif %}>
     <summary>More filters{% if more_set %} (in use){% endif %}</summary>
     <div class="filters-inner">
-  <label class="field"><span>Category</span><select name="category"><option value="">any</option>
+  <label class="field"><span>Role</span><select name="category"><option value="">any of mine</option>
     {% for k, c in categories.items() %}<option value="{{ k }}" {% if filters.category == k %}selected{% endif %}>{{ c.label }}</option>{% endfor %}</select></label>
   <label class="field"><span>Eligibility</span><select name="eligibility"><option value="">any</option>
-    {% for e in ["eligible","likely_eligible","unknown","ineligible"] %}<option {% if filters.eligibility == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
+    {% for e in ["eligible","likely_eligible","unknown","ineligible"] %}<option value="{{ e }}" {% if filters.eligibility == e %}selected{% endif %}>{{ e|replace('_', ' ') }}</option>{% endfor %}</select></label>
   <label class="field"><span>Work mode</span><select name="remote"><option value="">any</option>
     {% for e in ["remote","hybrid","onsite","unknown"] %}<option {% if filters.remote == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
-  <label class="field"><span>Posted within</span><select name="posted_within_days"><option value="">any time</option>
-    {% for d in [1,3,7,14,30] %}<option value="{{ d }}" {% if filters.posted_within_days == d %}selected{% endif %}>{{ d }} days</option>{% endfor %}</select></label>
-  <label class="field"><span>Triage</span><select name="user_status"><option value="">not dismissed</option>
-    {% for e in ["new","shortlisted","dismissed"] %}<option {% if filters.user_status == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
+  {% if not hidden_view %}<label class="field"><span>Triage</span><select name="user_status"><option value="">not dismissed</option>
+    {% for e in ["new","shortlisted","dismissed"] %}<option {% if filters.user_status == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>{% endif %}
   <label class="field"><span>Status</span><select name="status">
     {% for v, l in [("active","active"),("expired","expired"),("","all")] %}<option value="{{ v }}" {% if (filters.status or "") == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
   <label class="field"><span>Source</span><select name="source_id"><option value="">any</option>
     {% for s in sources %}<option value="{{ s.id }}" {% if filters.source_id == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select></label>
     </div>
   </details>
-  <div class="actions"><button class="primary">Apply filters</button><a href="/jobs" class="button">Reset</a></div>
+  <details class="search-help" id="search-help">
+    <summary>Search tips</summary>
+    <ul>
+      <li><code>java spring</code>: both words, anywhere. Whole words only: <code>java</code> doesn't match JavaScript.</li>
+      <li><code>"low level design"</code>: exact phrase · <code>-senior</code>: leave out jobs that mention it</li>
+      <li><code>title:backend</code> · <code>company:amazon</code> · <code>in:pune</code> · <code>skill:kafka</code>: look in one place only</li>
+      <li>Skills match their other names: <code>k8s</code> = kubernetes, <code>postgres</code> = postgresql, <code>js</code> = javascript</li>
+      <li>Best matches come first: title hits, then skills / company, then description, then match score.</li>
+      <li>Press <kbd>/</kbd> anywhere on this page to jump to the search box.</li>
+    </ul>
+  </details>
 </form>
 
-<p class="muted">{{ total }} job(s){% if pages > 1 %} · page {{ page }} of {{ pages }}{% endif %}</p>
+<p class="result-count muted" aria-live="polite"><b>{{ total }}</b> job{{ '' if total == 1 else 's' }}{% if query.terms %} matching <b>{{ filters.q }}</b>{% endif %}{% if pages > 1 %} · page {{ page }} of {{ pages }}{% endif %}</p>
 {% if jobs %}
-<div class="table-wrap card" style="padding:0"><table class="table">
-  <thead><tr><th>Score</th><th>Job</th><th>Category</th><th>Eligibility</th><th>Mode</th><th>Posted / seen</th><th></th></tr></thead>
-  <tbody>
-  {% for j in jobs %}{% set a = app_by_job.get(j.id) %}
-    <tr{% if a and a.applied_at %} class="row-applied"{% endif %}>
-      <td>{{ score(j.relevance_score) }}</td>
-      <td class="wrap"><a href="/jobs/{{ j.id }}"><b>{{ j.title }}</b></a><div class="muted small">{{ j.company_name or "unknown company" }} · {{ j.location or "location not stated" }}</div>
+<ul class="job-list">
+  {% for j in jobs %}{% set a = app_by_job.get(j.id) %}{% set applied = a and a.applied_at %}
+  <li class="job-card{% if applied %} is-applied{% endif %}">
+    <div class="job-score">{{ score(j.relevance_score) }}<span class="muted">match</span></div>
+    <div class="job-main">
+      <a class="job-title" href="/jobs/{{ j.id }}">{{ hl(j.title) }}</a>
+      <div class="job-meta">
+        <span class="job-company">{{ hl(j.company_name or "Unknown company") }}</span>
+        <span aria-hidden="true">·</span><span>{{ hl(j.location or "Location not stated") }}</span>
+        {% if j.remote_type and j.remote_type != "unknown" and j.remote_type not in (j.location or "")|lower %}<span aria-hidden="true">·</span><span>{{ j.remote_type }}</span>{% endif %}
+      </div>
+      {% if j.search_info and j.search_info.snippet %}<p class="job-snippet">{{ j.search_info.snippet }}</p>{% endif %}
+      <div class="job-tags">
+        {% if hidden_view and j.hidden_reason %}<span class="badge b-warn">hidden: {{ cleanup_label(j.hidden_reason) }}</span>{% endif %}
         {{ j|region_badges }}
+        {% if j.level_fit == "fit" %}{{ badge("Fresher / SDE-1", "b-level-fit") }}
+        {% elif j.level_fit == "no" %}{{ badge("above SDE-1", "b-warn") }}
+        {% else %}{{ badge("level not stated", "b-none") }}{% endif %}
+        {% if j.experience_min_years is not none %}<span class="badge b-none">{{ j.experience_min_years|round|int }}{% if j.experience_max_years %}–{{ j.experience_max_years|round|int }}{% else %}+{% endif %} yrs</span>{% endif %}
+        {% if j.category in categories %}<span class="badge b-cat">{{ categories[j.category].label }}</span>{% endif %}
+        {% if j.eligibility and j.eligibility not in ("eligible", "unknown") %}{{ badge(j.eligibility|replace('_', ' '), 'b-' ~ j.eligibility) }}{% endif %}
         {% if j.repost_of_id %}{{ badge("repost", "b-warn") }}{% endif %}{% if j.status == "expired" %}{{ badge("expired") }}{% endif %}
-        {% if a and a.applied_at %}{{ badge("✓ applied " ~ (a.applied_at|d), "b-applied") }}{% if a.status not in ("applied", "shortlisted") %} {{ badge(a.status) }}{% endif %}
-        {% elif j.user_status != "new" %}{{ badge(j.user_status) }}{% endif %}
-        {% if j.match_details and j.match_details.needs_review %}{{ badge("needs review", "b-needs_review") }}{% endif %}</td>
-      <td>{{ categories[j.category].label if j.category in categories else "—" }}</td>
-      <td>{{ badge(j.eligibility) }}</td>
-      <td>{{ j.remote_type }}</td>
-      <td class="nowrap small">{{ j.posted_at|d }}<div class="muted">seen {{ j.first_seen_at|d }}</div></td>
-      <td><div class="row-actions">
-        {% if a and a.applied_at %}<a class="button small" href="/applications/{{ a.id }}">application</a>
+        {% if applied %}{{ badge("✓ applied " ~ (a.applied_at|d), "b-applied") }}{% if a.status not in ("applied", "shortlisted") %} {{ badge(a.status) }}{% endif %}
+        {% elif j.user_status != "new" and not hidden_view %}{{ badge(j.user_status) }}{% endif %}
+        {% if j.match_details and j.match_details.needs_review %}{{ badge("needs review", "b-needs_review") }}{% endif %}
+      </div>
+    </div>
+    <div class="job-side">
+      <span class="job-date muted small" title="First seen {{ j.first_seen_at|d }}">{% if j.posted_at %}Posted {{ j.posted_at|d }}{% else %}Seen {{ j.first_seen_at|d }}{% endif %}</span>
+      <div class="row-actions">
+        {% if hidden_view %}
+        <form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="new"><input type="hidden" name="next" value="{{ here }}"><button class="small">Restore</button></form>
+        {% elif applied %}<a class="button small" href="/applications/{{ a.id }}">View application</a>
         {% else %}
-        {% if j.apply_url or j.source_url %}<a class="button small primary" href="{{ j.apply_url or j.source_url }}" target="_blank" rel="noopener noreferrer">apply ↗</a>{% endif %}
-        <a class="button small" href="/jobs/{{ j.id }}#apply" title="Resume, apply link and 'I applied' on one page">record / resume</a>
-        {% if j.user_status != "shortlisted" %}<form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="shortlisted"><input type="hidden" name="next" value="{{ request.url.path }}?{{ request.url.query }}"><button class="small" title="Save for later">save</button></form>{% endif %}
-        {% if j.user_status != "dismissed" %}<form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="dismissed"><input type="hidden" name="next" value="{{ request.url.path }}?{{ request.url.query }}"><button class="small">dismiss</button></form>{% endif %}
+        {% if j.apply_url or j.source_url %}<a class="button small primary" href="{{ j.apply_url or j.source_url }}" target="_blank" rel="noopener noreferrer">Apply ↗</a>{% endif %}
+        <a class="button small" href="/jobs/{{ j.id }}#apply" title="Resume, apply link and 'I applied' on one page">Resume &amp; record</a>
+        {% if j.user_status != "shortlisted" %}<form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="shortlisted"><input type="hidden" name="next" value="{{ here }}"><button class="small" title="Save for later">Save</button></form>{% endif %}
+        {% if j.user_status != "dismissed" %}<form method="post" action="/jobs/{{ j.id }}/status" class="inline"><input type="hidden" name="status" value="dismissed"><input type="hidden" name="next" value="{{ here }}"><button class="small ghost" title="Not interested">Dismiss</button></form>{% endif %}
         {% endif %}
-      </div></td>
-    </tr>
+      </div>
+    </div>
+  </li>
   {% endfor %}
-  </tbody>
-</table></div>
-{% if pages > 1 %}<div class="actions">
-  {% if page > 1 %}<a class="button" href="/jobs?{{ base_qs }}&page={{ page - 1 }}">← prev</a>{% endif %}
-  {% if page < pages %}<a class="button" href="/jobs?{{ base_qs }}&page={{ page + 1 }}">next →</a>{% endif %}
+</ul>
+{% if pages > 1 %}<div class="actions pager">
+  {% if page > 1 %}<a class="button" href="{{ base }}?{{ base_qs }}&page={{ page - 1 }}">← Previous</a>{% endif %}
+  <span class="muted small">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="button" href="{{ base }}?{{ base_qs }}&page={{ page + 1 }}">Next →</a>{% endif %}
 </div>{% endif %}
-{% else %}{{ empty("No jobs match. Add a source, paste a job URL, or import a CSV/JSON file.") }}{% endif %}
+{% else %}
+  <div class="empty-state card">
+  {% if hidden_view %}<p>Nothing is hidden by the cleanup.</p>
+  {% elif query.terms %}
+    <p><b>No jobs match “{{ filters.q }}”</b> in this view.</p>
+    {% if widen %}<p><a class="button" href="{{ base }}?{{ widen.qs }}">Show {{ widen.count }} match{{ 'es' if widen.count != 1 }} at any level, role or region</a></p>{% endif %}
+    <p class="muted small">Check the spelling, remove a word, or drop a <code>field:</code> prefix.</p>
+  {% elif level != "any" or roles != "any" or region %}
+    <p>No fresher / SDE-1 jobs match these filters. Try “All levels”, “All roles”, or another region — or add a source.</p>
+  {% else %}<p>No jobs match. Add a source, paste a job URL, or import a CSV/JSON file.</p>{% endif %}
+  </div>
+{% endif %}
 {% endblock %}

@@ -102,8 +102,13 @@ def _rematch(settings: Settings) -> Callable[[Session], dict]:
         from jobpilot.services import matching
 
         n = matching.rematch_stale(s)
-        return {"message": f"{n} job score(s) updated (unscored, or scored before your profile/settings changed)",
-                "rescored": n}
+        out = {"message": f"{n} job score(s) updated (unscored, or scored before your profile/settings changed)",
+               "rescored": n}
+        from jobpilot.services import cleanup, settings_store
+
+        if n and settings_store.get(s, "job_cleanup")["auto"]:
+            out["hidden"] = cleanup.run(s, trigger="rematch")["hidden"]
+        return out
     return run
 
 
@@ -154,7 +159,17 @@ TASK_LABELS = {
     "health_check": "System health and database integrity check",
     "notify": "Telegram notifications and daily summary (only when Telegram is configured; sends to your chat only)",
     "outreach": "Recruiter outreach (only when outreach.auto_enabled; sends only to addresses you verified)",
+    "agents": "Agents cycle: search → tailored resumes → apply where safe (sends nothing in dry-run mode)",
 }
+
+
+def _agents(settings: Settings) -> Callable[[Session], dict]:
+    def run(s: Session) -> dict:
+        from jobpilot.agents import run_cycle
+
+        return run_cycle(s, settings)
+    return run
+
 
 TASKS: dict[str, Callable[[Settings], Callable[[Session], dict]]] = {
     "collect_jobs": _collect,
@@ -166,6 +181,7 @@ TASKS: dict[str, Callable[[Settings], Callable[[Session], dict]]] = {
     "reminders": _reminders,
     "health_check": _health_check,
     "outreach": _outreach,  # after collection and rematch, before notify
+    "agents": _agents,  # search → tailored resumes → apply; before notify, so its summary goes out in the same pass
     "notify": _notify,  # last: a pass that collects jobs notifies about them in the same pass
 }
 # After a failed run, wait before trying again: 15 min, 30 min, 1 h, ... capped at the task's own interval.

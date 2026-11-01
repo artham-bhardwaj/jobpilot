@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, UploadFile
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from jobpilot.models import Job, JobSource, SourceRun
 from jobpilot.services import jobs as job_svc
-from jobpilot.services import matching, resumes as rs, settings_store
+from jobpilot.services import job_export, matching, resumes as rs, settings_store
 from jobpilot.services.tasks import run_task
 from jobpilot.sources import ADAPTERS
 from jobpilot.sources.http import FetchError, PoliteHttp
@@ -29,12 +29,22 @@ def _int(v, default=None):
         return default
 
 
-@router.get("/jobs")
-def explorer(request: Request, db: Session = Depends(get_db)):
-    qp = request.query_params
+LEVELS = (("fresher", "Fresher / SDE-1", "Entry-level titles, 0–2 years asked, or level not stated"),
+          ("fresher_stated", "Confirmed only", "Hide jobs that don't state a level"),
+          ("any", "All levels", "Include SDE II, senior and other levels"))
+REGION_TABS = (("", "All my regions"), ("india", "India"), ("remote", "Remote"), ("dubai", "Dubai / UAE"))
+
+
+def _explorer_filters(qp) -> tuple[dict, str, str, str, bool]:
+    """The Jobs page's search filters from its query string (shared by the page and its exports)."""
+    hidden_view = qp.get("hidden") == "cleanup"
+    # The cleanup view lists exactly what was hidden, so the focus filters (which hid them) are off there.
+    level = "any" if hidden_view else (qp.get("level") or "fresher")
+    roles = "any" if hidden_view else (qp.get("roles") or "mine")
+    region = "any" if hidden_view else (qp.get("region") or "")
     filters = {
         "q": qp.get("q") or None,
-        "status": qp.get("status", "active") or None,
+        "status": qp.get("status", "" if hidden_view else "active") or None,
         "category": qp.get("category") or None,
         "eligibility": qp.get("eligibility") or None,
         "remote": qp.get("remote") or None,
@@ -42,10 +52,69 @@ def explorer(request: Request, db: Session = Depends(get_db)):
         "min_score": _int(qp.get("min_score")),
         "source_id": _int(qp.get("source_id")),
         "posted_within_days": _int(qp.get("posted_within_days")),
-        "region": qp.get("region") or None,
+        "region": region or "mine",
         "applied": qp.get("applied") if qp.get("applied") in ("yes", "no") else None,
+        "level": level if level in ("fresher", "fresher_stated") else None,
+        "roles_only": roles != "any",
+        "hidden": "cleanup" if hidden_view else None,
         "sort": qp.get("sort", "relevance"),
+        "sector": "fintech" if qp.get("sector") == "fintech" else None,
     }
+    return filters, level, roles, region, hidden_view
+
+
+def export_response(fmt: str, jobs: list, title: str, parts: list[str], stem: str):
+    """A PDF or Excel download of ``jobs`` (title, company, location, apply link) to share."""
+    if fmt not in ("pdf", "xlsx"):
+        raise HTTPException(404)
+    rows = job_export.rows_for(jobs)
+    subtitle = " · ".join([*parts, f"{len(rows)} job{'' if len(rows) == 1 else 's'}",
+                           f"exported {date.today():%d %b %Y}"])
+    if fmt == "pdf":
+        body, media = job_export.to_pdf(rows, title=f"JobPilot: {title}", subtitle=subtitle), "application/pdf"
+    else:
+        body = job_export.to_xlsx(rows, title=title)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return Response(body, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{job_export.filename(stem, fmt)}"'})
+
+
+@router.get("/jobs/export.{fmt}")
+def explorer_export(fmt: str, request: Request, db: Session = Depends(get_db)):
+    """Every job the Jobs page shows with these filters (all pages, not just the current one)."""
+    filters, level, _, region, hidden_view = _explorer_filters(request.query_params)
+    jobs, _ = job_svc.search(db, limit=job_export.MAX_ROWS, **filters)
+    parts = ["Hidden by cleanup"] if hidden_view else [
+        "All levels" if level == "any" else "Fresher & SDE-1",
+        {"india": "India", "remote": "Remote", "dubai": "Dubai / UAE", "other": "Other places",
+         "any": "Any region"}.get(region, "India, Dubai and remote")]
+    if filters["q"]:
+        parts.append(f'search "{filters["q"]}"')
+    if filters["sector"] == "fintech":
+        return export_response(fmt, jobs, "Fintech jobs", parts, "jobpilot-fintech-jobs")
+    return export_response(fmt, jobs, "Jobs", parts, "jobpilot-jobs")
+
+
+@router.get("/jobs")
+def explorer(request: Request, db: Session = Depends(get_db)):
+    """Defaults to your focus: fresher / SDE-1 roles, in India, remote or Dubai, in your role categories.
+    ``level=any``, ``region=any`` and ``roles=any`` widen it."""
+    return _explorer_page(request, db, base="/jobs")
+
+
+@router.get("/fintech")
+def fintech_jobs(request: Request, db: Session = Depends(get_db)):
+    """The Jobs page limited to fintech, bank and exchange companies (services/sectors.py), with the same filters."""
+    return _explorer_page(request, db, base="/fintech", sector="fintech")
+
+
+def _explorer_page(request: Request, db: Session, *, base: str, sector: str | None = None):
+    from jobpilot.services import cleanup, search_query
+
+    qp = request.query_params
+    filters, level, roles, region, hidden_view = _explorer_filters(qp)
+    if sector:
+        filters["sector"] = sector
     page = max(1, _int(qp.get("page"), 1))
     jobs, total = job_svc.search(db, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE, **filters)
     sources = list(db.scalars(select(JobSource).order_by(JobSource.name)))
@@ -56,15 +125,68 @@ def explorer(request: Request, db: Session = Depends(get_db)):
     ids = [j.id for j in jobs]
     app_by_job = {a.job_id: a for a in db.scalars(select(Application).where(Application.job_id.in_(ids)))} if ids else {}
 
-    from jobpilot.services import regions
+    def qs(*drop: str) -> str:
+        return urlencode([(k, v) for k, v in qp.items() if k not in ("page", *drop)])
 
-    base_qs = urlencode([(k, v) for k, v in qp.items() if k != "page"])
-    # Region tabs keep every other filter.
-    tab_qs = urlencode([(k, v) for k, v in qp.items() if k not in ("page", "region")])
+    # Each region tab counts with every other filter applied, so the numbers match what the tab shows.
+    region_counts = {key: job_svc.search(db, limit=0, **{**filters, "region": key or "mine"})[1]
+                     for key, _ in REGION_TABS}
+    query = search_query.parse(filters["q"])
+    widen = None
+    if not total and query.terms and not hidden_view:  # nothing found: would a wider search find something?
+        wide = job_svc.search(db, limit=0, **{**filters, "level": None, "roles_only": False, "region": "any"})[1]
+        if wide:
+            widen = {"count": wide, "qs": urlencode([(k, v) for k, v in qp.items() if k not in ("page", "level", "roles", "region")]
+                                                    + [("level", "any"), ("roles", "any"), ("region", "any")])}
+    hidden = {}
+    if level != "any":
+        hidden["level"] = job_svc.search(db, limit=0, **{**filters, "level": None})[1] - total
+    if roles != "any":
+        hidden["roles"] = job_svc.search(db, limit=0, **{**filters, "roles_only": False})[1] - total
     return render(request, "jobs.html", jobs=jobs, total=total, page=page, pages=(total + PAGE_SIZE - 1) // PAGE_SIZE,
-                  filters=filters, categories=settings_store.get(db, "role_categories"), sources=sources,
-                  base_qs=base_qs, tab_qs=tab_qs, app_by_job=app_by_job, region_counts=regions.counts(db, filters["status"] or ""),
+                  filters=filters, level=level, roles=roles, region=region, levels=LEVELS, region_tabs=REGION_TABS,
+                  hidden=hidden, query=query, hl=lambda t: search_query.highlight(t, query), widen=widen, hidden_view=hidden_view, cleanup_label=cleanup.label,
+                  cleaned=cleanup.hidden_count(db), cleanup_preview=len(cleanup.plan(db)["hide"]),
+                  skill_chips=_skill_chips(db, filters), categories=settings_store.get(db, "role_categories"), sources=sources,
+                  base_qs=qs(), noq_qs=qs("q"), tab_qs=qs("region"), level_qs=qs("level"), roles_qs=qs("roles"),
+                  app_by_job=app_by_job, region_counts=region_counts, base=base, sector=filters["sector"],
+                  export_qs=urlencode([(k, v) for k, v in qp.items() if k not in ("page", "sector")]
+                                      + ([("sector", filters["sector"])] if filters["sector"] else [])),
                   threshold=settings_store.get(db, "matching")["relevance_threshold"])
+
+
+def _skill_chips(db: Session, filters: dict, n: int = 10) -> list[str]:
+    """Your confirmed skills that the jobs in the current focus ask for most (quick search chips)."""
+    from collections import Counter
+
+    from jobpilot.models import Skill
+
+    mine = {s.normalized_name for s in db.scalars(select(Skill).where(Skill.status == "confirmed"))}
+    base = {**filters, "q": None}
+    jobs, _ = job_svc.search(db, limit=1000, **base)
+    counts = Counter(k for j in jobs for k in set(((j.match_details or {}).get("skills") or {}).get("mandatory") or [])
+                     | set(((j.match_details or {}).get("skills") or {}).get("preferred") or []) if k in mine)
+    return [k for k, _ in counts.most_common(n)]
+
+
+@router.post("/jobs/cleanup")
+def cleanup_run(db: Session = Depends(get_db)):
+    from jobpilot.services import cleanup
+
+    res = cleanup.run(db)
+    db.commit()
+    parts = ", ".join(f"{v} {cleanup.REASONS[k]}" for k, v in res["by_reason"].items() if v)
+    return redirect("/jobs", msg=f"Hid {res['hidden']} irrelevant job(s){': ' + parts if parts else ''}. "
+                                 "Nothing was deleted; see 'Hidden by cleanup' to restore.")
+
+
+@router.post("/jobs/cleanup/undo")
+def cleanup_undo(db: Session = Depends(get_db)):
+    from jobpilot.services import cleanup
+
+    n = cleanup.undo(db)
+    db.commit()
+    return redirect("/jobs", msg=f"Restored {n} job(s) hidden by the cleanup")
 
 
 @router.get("/jobs/new")
@@ -114,8 +236,13 @@ async def import_file(request: Request, file: UploadFile, db: Session = Depends(
 
 @router.post("/jobs/rematch")
 def rematch(db: Session = Depends(get_db)):
+    from jobpilot.services import cleanup
+
     n = matching.rematch_all(db)
-    return redirect("/jobs", msg=f"Re-scored {n} active job(s) with current profile and settings")
+    hidden = cleanup.run(db, trigger="rematch")["hidden"] if settings_store.get(db, "job_cleanup")["auto"] else 0
+    db.commit()
+    return redirect("/jobs", msg=f"Re-scored {n} active job(s) with current profile and settings"
+                    + (f"; hid {hidden} that no longer fit (see Hidden by cleanup)" if hidden else ""))
 
 
 @router.get("/jobs/{job_id:int}")
@@ -146,14 +273,22 @@ async def tailored_generate(job_id: int, request: Request, db: Session = Depends
 
     job = get_or_404(db, Job, job_id)
     form = await form_dict(request)
+    back = _local_next(form.get("next"), f"/jobs/{job_id}#tailored")
     try:
         tr = tailored.generate(db, request.app.state.settings, job, force=bool(form.get("force")))
     except tailored.TailorError as exc:
-        return redirect(f"/jobs/{job_id}#tailored", err=str(exc))
+        return redirect(back, err=str(exc))
     db.commit()
     if tr.status == "valid":
-        return redirect(f"/jobs/{job_id}#tailored", msg="Tailored resume ready and validated")
-    return redirect(f"/jobs/{job_id}#tailored", err=f"Tailored resume not generated: {(tr.error or '')[:300]}")
+        return redirect(back, msg=f"Resume for {job.title} at {job.company_name or 'this company'} is ready and validated")
+    return redirect(back, err=f"Tailored resume not generated: {(tr.error or '')[:300]}")
+
+
+def _local_next(nxt: str | None, default: str) -> str:
+    """A return path from a form, only if it is a local Jobs / Job desk path."""
+    if nxt and not nxt.startswith("//") and nxt.startswith(("/jobs", "/desk")):
+        return nxt
+    return default
 
 
 @router.get("/tailored-resumes/{tr_id:int}/download")

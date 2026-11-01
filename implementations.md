@@ -3,6 +3,38 @@
 Every implementation in this repository, newest first, with a local timestamp. See `CLAUDE.md` for the rule and the
 entry format. Earlier milestones (before this log existed) are summarised in `IMPLEMENTATION_STATUS.md`.
 
+## 2026-11-01 20:50 IST — Master resume v3 (new backend skills)
+
+- Why: you asked for the Master resume to list the backend skills added to the hub, so tailored resumes include them.
+- `ArthamBhardwaj_Master_v3.tex` = v2 with only TECHNICAL SKILLS changed: Shell Scripting (Languages); Spring
+  Security, Spring Cloud (Backend; JPA/Hibernate moved before Actuator/Micrometer so the line doesn't overflow);
+  a new "System Design & Security" line; Linux, Nginx and "AWS (EC2, S3, Lambda, RDS, SQS)" (DevOps). Compiled
+  locally (2 pages, no new overfull boxes), imported as Master resume v3, reviewed (diff = the skills lines only;
+  13 skills added, none removed, no unconfirmed skills, no contradictions), approved with acknowledgement, and
+  its LaTeX registered as the template (`templates/master_v3_6cddd5890b7c.tex`). 43 earlier tailored resumes are
+  now marked outdated; v1 and v2 stay approved.
+- Files: `howtouse.md` (Master resume section). Data: the new source, PDF and template under `data/files` (not in
+  git).
+- Migrations: none.
+- Verification: `jobpilot resume generate --job 203` made a new tailored resume from v3: valid, 13/13 checks passed,
+  and the new skills appear in it.
+- Left to do: none. Tailored resumes for other jobs are rebuilt when you next ask for them.
+
+## 2026-11-01 20:29 IST — Backend skills added to the information hub
+
+- Why: you said you've learned these backend skills and want them used for resume generation and matching.
+- Skill dictionary: new built-in skills caching, load balancing, database sharding, rate limiting, oauth2, jwt,
+  api security, nginx; AWS now also recognises "AWS Lambda", "Amazon/AWS RDS", "Amazon/AWS SQS".
+- Profile data (not code): 13 confirmed skills added as self-reported (Spring Security, Spring Cloud, System Design,
+  Caching, Load Balancing, Database Sharding, Rate Limiting, OAuth2, JWT, API Security, Linux, Shell Scripting,
+  Nginx); notes added to AWS (EC2, S3, Lambda, RDS, SQS) and Hibernate (Spring Data JPA). 48 skills now.
+- Files: `src/jobpilot/services/skills_taxonomy.py`.
+- Migrations: none.
+- Verification: full `pytest` suite passed (exit 0). `jobpilot rematch` re-scored 562 jobs. Docker rebuilt and healthy.
+- Left to do: tailored resumes only reorder what your Master resume's LaTeX already lists, so these skills don't
+  appear on the PDFs until the Master resume's TECHNICAL SKILLS section includes them and the template is
+  re-registered.
+
 ## 2026-11-01 19:13 IST — Tailored resume PDFs (and LaTeX) from Telegram
 
 - Why: you asked that a resume requested on Telegram is made from LaTeX and sent to you as a PDF.

@@ -168,14 +168,17 @@ reviews and recruiter tasks. Turn any kind on in **Settings → notifications**.
 
 ### Your Master resume
 
-The Master resume is the approved PDF everything starts from. The active version is **Master resume v2**, the same as
-v1 with the Class XII year corrected to 2020. v1 is kept, still approved, and still used by the applications that were
-prepared with it.
+The Master resume is the approved PDF everything starts from. The active version is **Master resume v3**: v2 with
+more skills in TECHNICAL SKILLS (Spring Security, Spring Cloud, Shell Scripting, Linux, Nginx, AWS services and a
+"System Design & Security" line). v2 is v1 with the Class XII year corrected to 2020. Older versions are kept, still
+approved, and still used by the applications that were prepared with them.
 
 - v1 PDF: `data/files/resumes/8da104a95abc59dd_ArthamBhardwajBackendEngineer2.pdf`; source:
   `~/Downloads/twopage.tex`.
 - v2 PDF: `data/files/resumes/9824ec0a37a33a7e_ArthamBhardwaj_Master_v2.pdf`; source:
   `data/files/resume_sources/ArthamBhardwaj_Master_v2.tex`.
+- v3 PDF: `data/files/resumes/d28a12e632bfcba4_ArthamBhardwaj_Master_v3.pdf`; source:
+  `data/files/resume_sources/ArthamBhardwaj_Master_v3.tex`.
 
 Every upload is checked against the approved file's checksum. A changed or corrupted file is never attached.
 
